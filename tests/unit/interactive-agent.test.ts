@@ -37,11 +37,11 @@ describe("interactive agent commands", () => {
     const codexGlm = interactiveAgent("codex-local-main", "http://127.0.0.1:8787");
     expect(codexGlm?.title).toBe("codex-local-main");
     expect(codexGlm?.agentProfile).toBeUndefined();
-    expect(codexGlm?.command).toContain("C:\\llm-tools\\glm-codex.cmd");
+    expect(codexGlm?.command).toContain("glm-codex.cmd");
 
     const codexQwen = interactiveAgent("codex-local-long", "http://127.0.0.1:8787");
     expect(codexQwen?.title).toBe("codex-local-long");
-    expect(codexQwen?.command).toContain("C:\\llm-tools\\qwen-codex.cmd");
+    expect(codexQwen?.command).toContain("qwen-codex.cmd");
 
     const qwen = interactiveAgent("claude-local-long", "http://127.0.0.1:8787");
     // Local claude-* profiles keep the launch command self-contained so every
@@ -100,7 +100,7 @@ describe("interactive agent commands", () => {
     expect(codexGlm?.command).not.toContain("--resume");
     // Without a resume id the wrapper is invoked bare (fresh session).
     const fresh = interactiveAgent("codex-local-main", "http://127.0.0.1:8787");
-    expect(fresh?.command).toContain("C:\\llm-tools\\glm-codex.cmd");
+    expect(fresh?.command).toContain("glm-codex.cmd");
     expect(fresh?.command).not.toContain("resume");
 
     const codexQwen = interactiveAgent("codex-local-long", "http://127.0.0.1:8787", "default", "sess-789");

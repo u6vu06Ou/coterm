@@ -309,7 +309,7 @@ function codexOfficialShimBody(): string[] {
 // via COTERM_GEMINI_KEY_FILE. Falls back to an inherited GEMINI_API_KEY so the
 // shim also works on machines without the key file.
 function geminiShimBody(): string[] {
-  const keyFile = (process.env.COTERM_GEMINI_KEY_FILE?.trim() || "D:\\Coterm\\.gitnexus\\.gitignore").replaceAll("'", "''");
+  const keyFile = (process.env.COTERM_GEMINI_KEY_FILE?.trim() || "gemini-key.txt").replaceAll("'", "''");
   return [
     `if (-not (Get-Command gemini -ErrorAction SilentlyContinue)) { Write-Host '找不到 gemini CLI（npm i -g @google/gemini-cli）' -ForegroundColor Yellow; return }`,
     `if (Test-Path -LiteralPath '${keyFile}') {`,

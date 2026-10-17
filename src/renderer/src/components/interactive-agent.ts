@@ -32,11 +32,11 @@ export function getAgentOptions(): readonly AgentOption[] {
 /** Kept for pre-registry consumers: the static fallback table. */
 export const INTERACTIVE_AGENT_OPTIONS: readonly AgentOption[] = BUILTIN_AGENT_OPTIONS;
 
-// ponytail: key file is the gitignored .gitnexus/.gitignore (single AIza line,
-// leading * from gitignore syntax). Read at launch time — never hardcoded,
+// ponytail: key file is a plain text file (single AIza line; a leading
+// * is stripped). Read at launch time — never hardcoded,
 // never written to a global env. Path is ASCII-safe and stable.
-const GEMINI_KEY_FILE = "D:\\Coterm\\.gitnexus\\.gitignore";
-const GEMINI_KEY_READ = `$env:GEMINI_API_KEY=@(((Get-Content '${GEMINI_KEY_FILE}' | Where-Object { $_ -match 'AIza' } | Select-Object -First 1) -replace '^[*]','').Trim())`;
+const GEMINI_KEY_FILE = "gemini-key.txt";
+const GEMINI_KEY_READ = `if (Test-Path -LiteralPath '${GEMINI_KEY_FILE}') { $env:GEMINI_API_KEY=@(((Get-Content -LiteralPath '${GEMINI_KEY_FILE}' | Where-Object { $_ -match 'AIza' } | Select-Object -First 1) -replace '^[*]','').Trim()) } elseif (-not $env:GEMINI_API_KEY) { Write-Host '[Coterm] Gemini key file not found; set GEMINI_API_KEY or create the key file' -ForegroundColor Yellow }`;
 
 function localEnv(name: string): string {
   const env = import.meta.env as unknown as Record<string, unknown>;
@@ -123,8 +123,8 @@ export function interactiveAgent(
     // so passing `resume <id>` lands as `codex ... resume <id>` (codex's resume subcommand,
     // NOT a --resume flag \u2014 codex has no such flag). Without resume, launches a fresh session.
     const wrapper = provider === "codex-local-long"
-      ? (localEnv("COTERM_QWEN_CODEX_CMD") || "C:\\llm-tools\\qwen-codex.cmd")
-      : (localEnv("COTERM_GLM_CODEX_CMD") || "C:\\llm-tools\\glm-codex.cmd");
+      ? (localEnv("COTERM_QWEN_CODEX_CMD") || "qwen-codex.cmd")
+      : (localEnv("COTERM_GLM_CODEX_CMD") || "glm-codex.cmd");
     const wrapperName = provider === "codex-local-long" ? "qwen-codex.cmd" : "glm-codex.cmd";
     const wrapperEnv = provider === "codex-local-long" ? "COTERM_QWEN_CODEX_CMD" : "COTERM_GLM_CODEX_CMD";
     const args = resumeSessionId ? ` resume '${ps(resumeSessionId)}'` : "";

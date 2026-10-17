@@ -1,4 +1,4 @@
-# Coterm ABCDEF Agent 作業契約
+# Coterm Agent 作業契約
 
 本契約規範**外部 agent（Agent API / IDE agent / shell 腳本）**、**renderer UI+IPC**、與**視窗內 agent** 透過 Coterm 作業時的邊界。以目前程式碼為準；標「已實作」=可用，「目前限制」=程式碼未提供。日期：2026-07-15。
 

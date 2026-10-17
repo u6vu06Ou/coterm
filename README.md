@@ -52,17 +52,16 @@ It's deliberately minimal — tools like herdr or orca have far more features. T
 
 ## Install
 
-**Prebuilt installer** — download `Coterm-<version>-Setup.exe` from releases and double-click to install.
-
-**From source** —
+**From source** (the only option right now — prebuilt installers will be published later):
 
 ```bash
-git clone <repo-url> coterm
+git clone https://github.com/u6vu06Ou/coterm.git coterm
 cd coterm
-npm install
-npm run dev      # launch dev app
-npm run dist     # build release/Coterm-<version>-Setup.exe
+npm ci
+npm run dev      # launch the dev app
 ```
+
+To build a Windows installer locally: `npm run dist` (outputs `release/Coterm-<version>-Setup.exe`).
 
 Requirements: Node.js 24.x (see `.node-version` and `package.json`) and the provider CLIs you intend to use (`claude`, `codex`, etc.). See [docs/PLATFORM-SUPPORT.md](docs/PLATFORM-SUPPORT.md).
 
@@ -100,8 +99,8 @@ Details and known gaps per platform: [docs/PLATFORM-SUPPORT.md](docs/PLATFORM-SU
 
 ## Documentation
 
-- [ABCDEF user guide](docs/ABCDEF_USER_GUIDE.md) — command palette, terminal engine, attention, worktree sandboxes, trusted resume, and checkpoints.
-- [ABCDEF agent contract](docs/ABCDEF_AGENT_GUIDE.md) — what external and in-terminal agents may call, plus mandatory safety rails.
+- [User guide](docs/USER_GUIDE.md) — command palette, terminal engine, attention, worktree sandboxes, trusted resume, and checkpoints.
+- [Agent contract](docs/AGENT_GUIDE.md) — what external and in-terminal agents may call, plus mandatory safety rails.
 - [Architecture](docs/ARCHITECTURE.md) — module boundaries and data flow.
 - [Customizing](docs/CUSTOMIZING.md) — proxy, settings, and agent API without editing core code.
 - [Platform support](docs/PLATFORM-SUPPORT.md) — tier matrix and per-OS notes.

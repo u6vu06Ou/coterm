@@ -22,7 +22,7 @@ localhost-only, token-gated **Agent API** for observation and keystroke injectio
 Read the repo docs as you go — they are the contract of record:
 
 - `README.md` — feature overview and install commands.
-- `docs/ABCDEF_USER_GUIDE.md` — every UI feature, keyed to actual code behavior.
+- `docs/USER_GUIDE.md` — every UI feature, keyed to actual code behavior.
 - `docs/AGENT-API.md` — the full agent REST/MCP API with curl and PowerShell examples.
 - `docs/CUSTOMIZING.md` — profiles.json, Settings fields, worked examples.
 - `docs/PLATFORM-SUPPORT.md` — per-OS support tiers and known gaps.
