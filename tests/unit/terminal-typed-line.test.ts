@@ -82,6 +82,17 @@ describe("findEchoedUserRows — paint-verified strict mode (sun skin)", () => {
     expect(findEchoedUserRows(rows, -1, [false, true, true], echo)).toEqual([0, 1, 2]);
   });
 
+  it("does not paint agent replies that auto-wrap after a short echo (2026-10-17 whole-block orange)", () => {
+    // 真實錄到的 Claude Code 整屏重繪：訊息補白撐滿列寬後不換行，直接接著畫回話，
+    // 回話在 xterm 裡全是 ❯ 列的軟換行續段（含空白列）。
+    const echo = captureWith(
+      "\x1b[K\x1b[37m\x1b[100m\r\n❯ \x1b[97m發 做" + " ".repeat(60) + "\x1b[m" + " ".repeat(80) +
+        "Edited 14 files +674 -24, pushed to main" + " ".repeat(40) + "● 收工作副本的功能已經推上 GitHub",
+    );
+    const rows = ["❯ 發 做", "", "  Edited 14 files +674 -24, pushed to main", "", "● 收工作副本的功能已經推上 GitHub"];
+    expect(findEchoedUserRows(rows, -1, [false, true, true, true, true], echo)).toEqual([0]);
+  });
+
   it("marks the visible head when the message bottom is clipped off-viewport", () => {
     const echo = captureWith(REAL_WRAPPED_ECHO);
     // 視口只看到前兩列：整條 key 變成 span 的前綴。

@@ -49,16 +49,19 @@ export function findEchoedUserRows(
     const above = (rows[index - 1] ?? "").trim();
     if (RULE_ROW.test(above)) continue;
     if (strict) {
-      // 先把軟換行的續段併成一整條邏輯行（❯ 行本列是首列，下一列 isWrapped）。
+      // 軟換行的續段要「逐列」有上色證據才併進來：Claude Code 新版整屏重繪
+      // 會用補白撐滿列寬、靠自動換行接著畫 agent 回話，整段回話在 xterm 裡
+      // 全是 ❯ 列的軟換行續段——不逐列驗證就會把整段回話一起刷橘。
       const run = [index];
       let joined = normalizeEchoKey(text);
       while (index + 1 < rows.length && wrapped?.[index + 1] === true) {
+        const nextKey = normalizeEchoKey(rows[index + 1] ?? "");
+        // 自動換行寫法：整條仍是某段 span 的前綴；逐列重繪寫法：該列自成 span。
+        if (nextKey.length === 0 || !(echo.test(joined + nextKey) || echo.test(nextKey))) break;
         index += 1;
         run.push(index);
-        joined += normalizeEchoKey(rows[index] ?? "");
+        joined += nextKey;
       }
-      // 整條比對（自動換行寫法整段一個 span）；首列單獨比對（逐列重繪寫法
-      // 每列一個 span）兜底。
       const confirmed = echo.test(joined) || echo.test(normalizeEchoKey(text));
       // 硬換行但縮排的續段（Codex 寫法）：每一列各自要有上色證據才收，
       // 「  ⎿ 工具結果」這類沒被刷色的列不會被吞進來。
