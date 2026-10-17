@@ -1,0 +1,46 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "io.coterm.app.beta",
+  "productName": "Coterm Beta",
+  "asar": true,
+  "asarUnpack": ["node_modules/@lydell/node-pty/**", "node_modules/@livekit/**"],
+  "extraResources": [{ "from": "node_modules/smol-toml/dist/index.cjs", "to": "codex-team/smol-toml.cjs" }, { "from": "tools/codex-team", "to": "codex-team", "filter": ["*.mjs", "*.example"] }, { "from": "tools/coterm-at", "to": "coterm-at", "filter": ["*.md"] }],
+  "files": [
+    "out/**/*",
+    "package.json",
+    "!node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**",
+    "!node_modules/@anthropic-ai/claude-agent-sdk/browser-sdk.js",
+    "!node_modules/@anthropic-ai/claude-agent-sdk/bridge.mjs",
+    "!node_modules/@anthropic-ai/claude-agent-sdk/extractFromBunfs.js",
+    "!**/node_modules/**/*.map",
+    "!**/node_modules/**/*.d.ts",
+    "!**/node_modules/**/*.d.mts",
+    "!**/node_modules/**/*.d.cts",
+    "!**/node_modules/**/{test,tests,spec,specs,__tests__,__mocks__,fixtures,coverage,lcov-report,tmp}/**",
+    "!**/node_modules/**/*.{test,spec}.{js,ts,mjs,cjs}",
+    "!**/node_modules/**/{README,CHANGELOG,AUTHORS,CONTRIBUTING,LICENSE}*",
+    "!node_modules/@livekit/local-inference/**",
+    "!node_modules/@livekit/local-inference-win32-x64-msvc/**",
+    "!node_modules/@img/sharp-wasm32/**",
+    "!node_modules/@img/sharp-webcontainers-wasm32/**"
+  ],
+  "directories": {
+    "buildResources": "resources",
+    "output": "release"
+  },
+  "win": {
+    "icon": "resources/icon.ico",
+    "electronLanguages": ["en-US", "zh-TW"],
+    "target": [{ "target": "nsis", "arch": ["x64"] }],
+    "artifactName": "Coterm Beta-${version}-Setup.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "deleteAppDataOnUninstall": false,
+    "shortcutName": "Coterm Beta"
+  }
+}

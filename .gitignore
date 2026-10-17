@@ -1,0 +1,47 @@
+node_modules/
+out/
+dist/
+release/
+coverage/
+test-results/
+playwright-report/
+.gitnexus/
+.vite/
+*.log
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+security-reports/*.private.json
+security-reports/secret-scan.json
+
+# Generated artifacts / scratch
+graphify-out/
+.test-screenshots/
+.review/
+release-check-*/
+release-next/
+.codebase-memory/
+.agents/
+.tmp-coterm-verify-userdata/
+.tmp/
+.apply_patch.cjs
+diag-*.png
+
+# Claude Code local settings (contains machine paths + permission allowlist)
+.claude/
+
+# Windows reserved-name artifact (0-byte, breaks git on add)
+nul
+
+# Backup files
+*.bak
+*.bak-*
+
+# Personal scratch
+readme 我的範例.txt
+
+# OSS scan allowlist (local only, never versioned)
+.oss-scan-allow

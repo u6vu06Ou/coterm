@@ -1,0 +1,25 @@
+:root {
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --blur-glass: 18px;
+  --blur-heavy: 28px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --font-ui: Inter, "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+  --z-bg-effect: 0;
+  --z-panel: 10;
+  --z-popover: 50;
+  --z-modal: 100;
+  --glass-blur: var(--blur-glass);
+  --app-background: var(--bg);
+  --panel-shadow: none;
+  --model-claude-fg: #e06c6c;
+  --model-codex-fg: #ffd24d;
+}

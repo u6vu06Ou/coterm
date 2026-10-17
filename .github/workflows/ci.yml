@@ -1,0 +1,50 @@
+name: CI
+
+# No push or release trigger: shipping runs the equivalent gates locally.
+# This workflow is only a manual/PR diagnostic backup and never blocks /ship.
+# regen-public.sh copies this file verbatim
+# into the public repo, so keep the two in sync by editing this one.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: windows-latest
+    env:
+      # Browser live integration tests must RUN in CI; without this they silently SKIP.
+      COTERM_BROWSER_LIVE_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium
+      - run: npm run ci:quality
+
+  bdd-electron:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run ci:bdd
+
+  packaged-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm run test:packaged

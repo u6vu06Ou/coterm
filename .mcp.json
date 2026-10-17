@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "coterm": {
+      "type": "http",
+      "url": "http://127.0.0.1:43127/api/v1/agent/mcp",
+      "headers": {
+        "Authorization": "Bearer ${COTERM_AGENT_TOKEN}"
+      }
+    }
+  }
+}
