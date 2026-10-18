@@ -10,6 +10,10 @@ export interface TerminalTranscriptQuery {
   startedAt: string;
   nativeSessionId: string | null;
   agentProfile: string | null;
+  /** Native session ids of the other live terminals, so a session hop never lands on theirs. */
+  reservedSessionIds?: readonly string[];
+  /** Called when the agent switched to a new session file in this terminal (/clear, /resume). */
+  onRebind?: (sessionId: string) => void;
 }
 
 export class TerminalTranscriptService {
@@ -34,7 +38,9 @@ export class TerminalTranscriptService {
       stale: false,
     };
     if (provider === "unsupported") return { ...base, status: "unsupported", sessionBinding: "none", reasonCode: "provider_not_supported" };
-    const resolved = await this.resolver.resolve({ ...query, provider });
+    const { onRebind, ...descriptor } = query;
+    const resolved = await this.resolver.resolve({ ...descriptor, provider });
+    if (resolved.reboundSessionId) onRebind?.(resolved.reboundSessionId);
     if (resolved.status !== "ready" || !resolved.file) {
       return { ...base, status: resolved.status, sessionBinding: resolved.binding, ...(resolved.reasonCode ? { reasonCode: resolved.reasonCode } : {}) };
     }

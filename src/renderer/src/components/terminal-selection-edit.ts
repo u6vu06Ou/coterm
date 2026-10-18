@@ -27,8 +27,9 @@
 //   that gap exists only in cell space and must not count as a character.
 // - Trailing untouched cells on the group's last row are padding, not input.
 //
-// Scope/safety gates: only the NORMAL buffer (fullscreen TUIs own their own
-// cursor), only selections fully inside the logical line group containing
+// Scope/safety gates: in the alternate screen (fullscreen Claude Code / Codex)
+// only a selection on the caret's own row — those TUIs park the real cursor on
+// their input caret but wrap long input themselves; in the NORMAL buffer only selections fully inside the logical line group containing
 // the live cursor (scrollback selections refuse the translation — the caller
 // then only clears the highlight and sends NOTHING to the PTY), and a total
 // keystroke budget of MAX_EDIT_CHARS. Hard-newline multi-line input
@@ -161,19 +162,27 @@ function normalizeOrder(selection: SelectionEditInput["selection"]): SelectionEd
  * to clearing the highlight only (never wrong-deleting).
  */
 export function planSelectionEdit(input: SelectionEditInput, key: SelectionEditKey): SelectionEditPlan | null {
-  if (input.altScreen) return null;
   const { rows, baseY, cursor } = input;
   const selection = normalizeOrder(input.selection);
   if (selection.start.y === selection.end.y && selection.start.x === selection.end.x) return null;
 
   const cy = cursor.y - baseY;
   if (cy < 0 || cy >= rows.length) return null;
-  // Wrapped group containing the live cursor = the editable input line.
   let gStart = cy;
-  while (gStart > 0 && rows[gStart]!.isWrapped) gStart -= 1;
-  if (rows[gStart]!.isWrapped) return null; // group starts above the given window
   let gEnd = cy;
-  while (gEnd + 1 < rows.length && rows[gEnd + 1]!.isWrapped) gEnd += 1;
+  if (input.altScreen) {
+    // Fullscreen agent TUIs (Claude Code, Codex) park the real cursor on their
+    // input caret but wrap long input themselves — no isWrapped rows, plus
+    // prompt/indent cells on every row. Only the caret's own row maps cleanly
+    // to characters, so a selection on that row is translated; anything that
+    // crosses rows stays clear-only.
+    if (selection.start.y !== cursor.y || selection.end.y !== cursor.y) return null;
+  } else {
+    // Wrapped group containing the live cursor = the editable input line.
+    while (gStart > 0 && rows[gStart]!.isWrapped) gStart -= 1;
+    if (rows[gStart]!.isWrapped) return null; // group starts above the given window
+    while (gEnd + 1 < rows.length && rows[gEnd + 1]!.isWrapped) gEnd += 1;
+  }
 
   const selStartRow = selection.start.y - baseY;
   const selEndRow = selection.end.y - baseY;

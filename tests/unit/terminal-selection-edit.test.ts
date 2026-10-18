@@ -185,10 +185,18 @@ describe("planSelectionEdit — refuses unsafe translations (caller falls back)"
     ).toBeNull();
   });
 
-  it("alternate screen (fullscreen TUI owns its cursor) → null", () => {
+  it("alternate screen: selection on the caret's own row is translated (Claude Code / Codex input)", () => {
+    const plan = planSelectionEdit(
+      geom({ rows: [promptRow], cursor: { x: 7, y: 0 }, selection: { start: { x: 2, y: 0 }, end: { x: 4, y: 0 } }, altScreen: true }),
+      "backspace",
+    );
+    expect(plan).toEqual({ sequence: L.repeat(3) + BS.repeat(2), deletedChars: 2 }); // "he"
+  });
+
+  it("alternate screen: a selection off the caret's row stays clear-only → null", () => {
     expect(
       planSelectionEdit(
-        geom({ rows: [promptRow], cursor: { x: 7, y: 0 }, selection: { start: { x: 2, y: 0 }, end: { x: 4, y: 0 } }, altScreen: true }),
+        geom({ rows: [outRow, promptRow], cursor: { x: 7, y: 1 }, selection: { start: { x: 0, y: 0 }, end: { x: 4, y: 1 } }, altScreen: true }),
         "backspace",
       ),
     ).toBeNull();

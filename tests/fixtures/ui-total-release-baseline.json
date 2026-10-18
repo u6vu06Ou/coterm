@@ -29,7 +29,6 @@
       "`sidebar.pulse.row:${index}`",
       "`skin.pulse.filter.${kind}`",
       "`skin.pulse.sort.${key}`",
-      "app.startup-alert.dismiss",
       "artifact.browser.address.change",
       "artifact.browser.back",
       "artifact.browser.create",

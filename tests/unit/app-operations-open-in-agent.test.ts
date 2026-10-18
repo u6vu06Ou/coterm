@@ -51,7 +51,7 @@ afterEach(async () => {
 // Minimal dependencies: the popout composition only touches
 // dependencies.browser; everything else satisfies the constructor's event
 // subscription and type surface.
-const stubOperations = (browser: BrowserRuntimeManager): AppOperations =>
+const stubOperations = (browser: BrowserRuntimeManager, webServerPort?: () => number): AppOperations =>
   new AppOperations({
     repository: {} as never,
     runs: { send: () => undefined, cancel: () => undefined, command: () => undefined } as never,
@@ -64,6 +64,7 @@ const stubOperations = (browser: BrowserRuntimeManager): AppOperations =>
     userDataPath: root,
     tempPath: root,
     browser,
+    webServerPort,
   } as never);
 
 describe("openInAgentBrowser (lead wiring entry, 2026-10-09)", () => {
@@ -88,15 +89,12 @@ describe("openInAgentBrowser (lead wiring entry, 2026-10-09)", () => {
     await manager.dispose();
   });
 
-  it("opens a local .html file through the previewLocalFile loopback route (file: stays hard-blocked)", async () => {
+  it("opens a local .html file from any folder through the loopback preview route (file: stays hard-blocked)", async () => {
     await mkdir(join(root, "artifacts"), { recursive: true });
     await writeFile(join(root, "artifacts", "demo.html"), "<html><body>demo</body></html>");
-    const manager = new BrowserRuntimeManager({
-      userDataPath: root,
-      loopbackPort: () => 4444,
-      previewRoots: () => [join(root, "artifacts")],
-    });
-    const operations = stubOperations(manager);
+    // No previewRoots: a user click must not be limited to approved folders (2026-10-18).
+    const manager = new BrowserRuntimeManager({ userDataPath: root, loopbackPort: () => 4444 });
+    const operations = stubOperations(manager, () => 4444);
     await operations.openInAgentBrowser({ target: join(root, "artifacts", "demo.html") });
 
     // The minted loopback URL navigated (token segment is runtime-minted),

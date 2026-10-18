@@ -339,11 +339,12 @@ export function TerminalReaderOverlay({
     return () => window.removeEventListener("scroll", onScroll, true);
   }, [active, reader.open]);
 
-  // Live-view polling: while the agent is working and the reader is open,
-  // refresh the transcript every ~2s so the phone view stays current. No
-  // loading state here — old content stays until the new arrives.
+  // Live-view polling: while the reader is open, refresh the transcript —
+  // every ~2s while the agent works, every ~5s otherwise (state detection can
+  // miss a busy agent, and that must not freeze the view). No loading state
+  // here — old content stays until the new arrives.
   useEffect(() => {
-    if (!reader.open || !active || tone !== "working") return;
+    if (!reader.open || !active) return;
     let alive = true;
     const timer = window.setInterval(() => {
       refresh();
@@ -354,7 +355,7 @@ export function TerminalReaderOverlay({
       }).catch(() => {
         // Background refresh failure: keep the old content on screen.
       });
-    }, 2000);
+    }, tone === "working" ? 2000 : 5000);
     return () => {
       alive = false;
       window.clearInterval(timer);

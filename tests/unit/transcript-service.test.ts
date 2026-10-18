@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -185,6 +185,49 @@ describe("providerFor prefix routing", () => {
     expect(providerFor("claude")).toBe("claude");
     expect(providerFor("codex")).toBe("codex");
     expect(providerFor(null)).toBe("unsupported");
+  });
+
+  it("follows Claude to the new session file after /clear and reports the new id", async () => {
+    const paths = await roots();
+    const cwd = "D:\\repo";
+    const oldId = "33333333-3333-4333-8333-333333333333";
+    const newId = "44444444-4444-4444-8444-444444444444";
+    const otherId = "55555555-5555-4555-8555-555555555555";
+    const folder = join(paths.claude, mungeClaudeCwd(cwd));
+    await mkdir(folder, { recursive: true });
+    const line = (text: string): string => `${JSON.stringify({ message: { role: "user", content: text } })}\n`;
+    await writeFile(join(folder, `${oldId}.jsonl`), line("before clear"));
+    // The old file went quiet a minute ago; the terminal started before that.
+    const quiet = new Date(Date.now() - 60_000);
+    await utimes(join(folder, `${oldId}.jsonl`), quiet, quiet);
+    await writeFile(join(folder, `${newId}.jsonl`), line("after clear"));
+    // Another terminal's live session in the same cwd must never be picked up.
+    await writeFile(join(folder, `${otherId}.jsonl`), line("someone else"));
+    const service = new TerminalTranscriptService({ claudeProjectsRoot: paths.claude, codexSessionsRoot: paths.codex });
+    const rebinds: string[] = [];
+    const query = {
+      terminalId: "t1", cwd, startedAt: new Date(Date.now() - 120_000).toISOString(),
+      nativeSessionId: oldId, agentProfile: "claude-official",
+      reservedSessionIds: [otherId], onRebind: (id: string) => rebinds.push(id),
+    };
+    await expect(service.get(query)).resolves.toMatchObject({ status: "ready", messages: [{ role: "user", text: "after clear" }] });
+    expect(rebinds).toEqual([newId]);
+  });
+
+  it("stays on the Claude file while it is still being written (no hop onto a parallel session)", async () => {
+    const paths = await roots();
+    const cwd = "D:\\repo";
+    const ownId = "66666666-6666-4666-8666-666666666666";
+    const folder = join(paths.claude, mungeClaudeCwd(cwd));
+    await mkdir(folder, { recursive: true });
+    const line = (text: string): string => `${JSON.stringify({ message: { role: "user", content: text } })}\n`;
+    await writeFile(join(folder, "77777777-7777-4777-8777-777777777777.jsonl"), line("unclaimed parallel"));
+    const past = new Date(Date.now() - 60_000);
+    await utimes(join(folder, "77777777-7777-4777-8777-777777777777.jsonl"), past, past);
+    await writeFile(join(folder, `${ownId}.jsonl`), line("mine"));
+    const service = new TerminalTranscriptService({ claudeProjectsRoot: paths.claude, codexSessionsRoot: paths.codex });
+    await expect(service.get({ terminalId: "t1", cwd, startedAt: new Date(Date.now() - 120_000).toISOString(), nativeSessionId: ownId, agentProfile: "claude-official" }))
+      .resolves.toMatchObject({ status: "ready", messages: [{ role: "user", text: "mine" }] });
   });
 });
 

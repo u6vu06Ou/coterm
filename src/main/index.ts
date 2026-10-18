@@ -114,20 +114,6 @@ let browserRuntime: BrowserRuntimeManager | null = null;
 let browserApproval: BrowserApprovalService | null = null;
 let browserSecrets: BrowserSecretVault | null = null;
 
-/**
- * Extra artifact-preview roots from `<userData>/artifact-roots.txt` (one absolute path per line,
- * `#` comments allowed). Read on demand so editing the file takes effect without a restart.
- */
-function readArtifactRoots(): string[] {
-  try {
-    return readFileSync(join(app.getPath("userData"), "artifact-roots.txt"), "utf8")
-      .split(/\r?\n/).map((line) => line.trim())
-      .filter((line) => line !== "" && !line.startsWith("#"));
-  } catch {
-    return []; // absent file is the normal case
-  }
-}
-
 process.on("unhandledRejection", (reason) => {
   logger.warn("app", "process.unhandledRejection", "Unhandled promise rejection", { reason: safeErrorMessage(reason) });
 });
@@ -593,7 +579,6 @@ async function bootstrap(): Promise<void> {
     clipboardWrite: (text: string) => clipboard.writeText(text),
     tempPath: app.getPath("temp"),
     webServerPort: () => webServer?.port ?? null,
-    artifactRoots: readArtifactRoots,
     workspaceShell: shell,
     remoteRoots: process.env.COTERM_REMOTE_ROOTS?.split(";").filter(Boolean) ?? storedConfig?.remoteRoots ?? [],
     worktrees,

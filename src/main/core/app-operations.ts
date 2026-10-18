@@ -65,7 +65,6 @@ import {
   checkpointCreateExplicitInputSchema,
 } from "@shared/schema";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -81,7 +80,7 @@ import type { PtyManager } from "../terminal/pty-manager";
 import { exportTerminalHandoff as exportTerminalHandoffCore } from "../terminal/handoff-exporter";
 import type { AppEventBus } from "./event-bus";
 import type { AttentionCenter } from "./attention-center";
-import { assertAllowedPath } from "../security/path-policy";
+import { assertAllowedPath, assertExistingPath } from "../security/path-policy";
 import { mintArtifactPreviewToken } from "../web/artifact-preview-tokens";
 import { DockLayoutManager } from "./dock-layout";
 import type { WorktreeManager } from "./worktree-manager";
@@ -116,18 +115,6 @@ import {
 } from "./workspace-operations";
 import { searchWorkspaceEntries as scanWorkspaceEntries } from "./workspace-search";
 
-const MAX_STARTUP_ALERT_CHARS = 16_000;
-
-export function readStartupAlerts(
-  alertsPath = join(homedir(), ".claude", "ALERTS.md"),
-): string {
-  try {
-    return readFileSync(alertsPath, "utf8").trim().slice(0, MAX_STARTUP_ALERT_CHARS);
-  } catch {
-    return "";
-  }
-}
-
 interface AppOperationsDependencies {
   repository: Repository;
   summarizer?: Pick<ConversationSummarizer, "summarize">;
@@ -155,13 +142,6 @@ interface AppOperationsDependencies {
   tempPath: string;
   /** Live web-server port, for minting loopback artifact-preview URLs. Absent before it starts. */
   webServerPort?: () => number | null;
-  /**
-   * Extra directories the artifact panel may preview, opted in per machine via
-   * `<userData>/artifact-roots.txt`. Exists because readArtifact is web-reachable and therefore
-   * cannot be unbounded, yet plenty of real artifacts live outside home (a Google Drive junction,
-   * a second drive). An explicit file is easier to audit than an env var on a GUI app.
-   */
-  artifactRoots?: () => string[];
   remoteRoots?: string[];
   worktrees?: WorktreeManager;
   checkpointer?: CheckpointManager;
@@ -265,7 +245,8 @@ export class AppOperations {
       providers: [],
       appVersion,
       userDataPath,
-      startupAlerts: readStartupAlerts(),
+      // ALERTS.md banner removed 2026-10-18 (user request); field kept empty for old clients.
+      startupAlerts: "",
     };
   }
 
@@ -665,15 +646,22 @@ export class AppOperations {
       const runtime = this.browserRuntime();
       const trimmed = input.target.trim();
       // file: is a hard-blocked scheme (browser-policy.ts), so a local target
-      // goes through the previewLocalFile loopback route; an http(s) URL goes
+      // goes through the loopback artifact-preview route; an http(s) URL goes
       // through the policy-checked session path. createSession is called directly
       // (it parses its own input): the action registry's schema.parse grafts a
       // defaulted `mode`, which defeats createSession's explicit-mode popout probe.
       if (/^https?:\/\//i.test(trimmed)) {
         await runtime.createSession({ url: trimmed });
       } else {
-        const preview = await dispatchBrowserAction(runtime, "previewLocalFile", { path: trimmed }, "ipc") as { url: string };
-        await runtime.createSession({ url: preview.url });
+        // A user click on a terminal path: any folder (2026-10-18), unlike the agent-facing
+        // previewLocalFile which stays limited to project/temp/userData roots.
+        const path = await assertExistingPath(trimmed);
+        if (!/\.html?$/i.test(path)) throw new Error("Local preview is limited to .html files.");
+        const port = this.dependencies.webServerPort?.();
+        if (!port) throw new Error("Local preview needs Coterm's web server to be running.");
+        await runtime.createSession({
+          url: `http://127.0.0.1:${port}/artifact-preview/${mintArtifactPreviewToken(dirname(path))}/${encodeURIComponent(basename(path))}`,
+        });
       }
       return { ok: true };
     } catch (error) {
@@ -699,16 +687,9 @@ export class AppOperations {
     const parsed = artifactReadInputSchema.parse(input);
     const project = this.dependencies.repository.getProject(parsed.projectId);
     if (!project) throw new Error("Project not found.");
-    // Kept to an explicit root list even though reveal/open-external no longer are: readArtifact is
-    // reachable over the web RPC, so an unbounded version would be a network-exposed
-    // arbitrary-file-read. homedir covers the usual scratch folders; anything further out
-    // (a mounted cloud drive, another drive letter) is opted in per machine via COTERM_REMOTE_ROOTS.
-    const allowedPath = await assertAllowedPath(parsed.path, {
-      roots: [
-        project.workspacePath, this.dependencies.userDataPath, this.dependencies.tempPath,
-        homedir(), ...(this.dependencies.remoteRoots ?? []), ...(this.dependencies.artifactRoots?.() ?? []),
-      ],
-    });
+    // No folder restriction (user decision 2026-10-18): an artifact link anywhere on disk must open.
+    // Exposure stays bounded by the extension whitelist + size caps below and the web server's auth.
+    const allowedPath = await assertExistingPath(parsed.path);
     const extension = extname(allowedPath).toLowerCase();
     if ([".xlsx", ".csv", ".tsv"].includes(extension)) {
       const info = await stat(allowedPath);
@@ -1202,6 +1183,12 @@ export class AppOperations {
       startedAt: terminal.startedAt,
       nativeSessionId: terminal.nativeSessionId,
       agentProfile: terminal.agentProfile,
+      reservedSessionIds: this.dependencies.terminals.dashboardSnapshot()
+        .map(({ info }) => info.id !== id ? info.nativeSessionId : null)
+        .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      // /clear or an in-session /resume moved the agent to a new file: keep the terminal's id in step
+      // so the reader, resume and header all follow the session the user is actually in.
+      onRebind: (sessionId) => this.dependencies.terminals.setNativeSessionId(id, sessionId),
     });
   }
   markTerminalAgent(input: unknown) {

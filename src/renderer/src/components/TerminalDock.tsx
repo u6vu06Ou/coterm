@@ -134,7 +134,9 @@ function openTerminalPath(rawPath: string, projectId: string): void {
   // client has no such IPC). Anything else, or a failure, keeps the panel.
   const api = window.aiTerminal;
   if (/\.html?$/i.test(path) && store.settings?.agentBrowserWindow === "popout" && !api.isBrowser && typeof api.openInAgentBrowser === "function") {
-    void api.openInAgentBrowser(path).catch(() => store.openArtifact(path, path.split(/[\\/]/).pop() ?? path, projectId));
+    // The IPC reports failure as { ok: false } rather than rejecting — both must fall back to the panel.
+    const fallback = (): void => store.openArtifact(path, path.split(/[\\/]/).pop() ?? path, projectId);
+    void api.openInAgentBrowser(path).then((result) => { if (!result?.ok) fallback(); }, fallback);
     return;
   }
   if (classifyTerminalPath(path) === "artifact") {

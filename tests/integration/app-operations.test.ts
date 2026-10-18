@@ -404,6 +404,15 @@ describe("AppOperations", () => {
     expect(workspaceShell.trashItem).toHaveBeenCalledWith(renamed.path);
     expect(await operations.readArtifact({ projectId: project.id, path: markdown }))
       .toMatchObject({ kind: "markdown", text: "old" });
+    // No folder restriction: a file outside the project, userData, temp and home still opens.
+    const outside = await mkdtemp(join(process.cwd(), ".artifact-outside-"));
+    try {
+      await writeFile(join(outside, "far.md"), "far", "utf8");
+      expect(await operations.readArtifact({ projectId: project.id, path: join(outside, "far.md") }))
+        .toMatchObject({ kind: "markdown", text: "far" });
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
     const csvArtifact = await operations.readArtifact({ projectId: project.id, path: csv });
     expect(csvArtifact).toMatchObject({ kind: "spreadsheet", mimeType: "text/csv" });
     if (!("workbookToken" in csvArtifact)) throw new Error("Expected a CSV workbook token");

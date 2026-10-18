@@ -78,14 +78,13 @@ function AppShell(): React.JSX.Element {
     error,
     clearError,
     settings,
-    startupAlerts,
     runningConversationIds,
     readingModeActive,
     setExclusive,
     resourceNotice,
   } = useAppStore(useShallow((s) => ({
     initialize: s.initialize, loading: s.loading, error: s.error,
-    clearError: s.clearError, settings: s.settings, startupAlerts: s.startupAlerts,
+    clearError: s.clearError, settings: s.settings,
     runningConversationIds: s.runningConversationIds, readingModeActive: s.readingModeActive,
     setExclusive: s.setExclusive,
     resourceNotice: s.resourceNotice,
@@ -105,11 +104,6 @@ function AppShell(): React.JSX.Element {
     return () => window.removeEventListener("keydown", openPreferences);
   }, []);
   const running = runningConversationIds.length > 0;
-  // ponytail: dismissal keyed by the alert TEXT in localStorage — no new RPC, no
-  // main-process write to ~/.claude/ALERTS.md (whoever wrote it owns that file).
-  // A different alert has a different key, so the next one still shows up.
-  const [dismissedAlert, setDismissedAlert] = useState(() => readDismissedAlert());
-  const visibleAlerts = startupAlerts && startupAlerts !== dismissedAlert ? startupAlerts : "";
 
   useEffect(() => {
     void initialize();
@@ -358,7 +352,7 @@ function AppShell(): React.JSX.Element {
           drops (file drags into xterm) and the reading-mode terminal drag are
           untouched. */}
       <section
-        className={`workspace-shell ${connected ? "connected-terminal " : ""}${visibleAlerts ? "has-startup-alerts" : ""}${sessionDropActive ? " session-drop-target" : ""}${soloDropActive ? " solo-drop-target" : ""}`}
+        className={`workspace-shell ${connected ? "connected-terminal " : ""}${sessionDropActive ? " session-drop-target" : ""}${soloDropActive ? " solo-drop-target" : ""}`}
         onDragEnter={(event) => {
           if (!isDesktop) return;
           const types = event.dataTransfer.types;
@@ -421,24 +415,6 @@ function AppShell(): React.JSX.Element {
           }
         }}
       >
-        {visibleAlerts && (
-          <div className="startup-alert-banner" role="alert">
-            <AlertTriangle size={16} aria-hidden="true" />
-            <span>{visibleAlerts}</span>
-            <button
-              data-action-id="app.startup-alert.dismiss"
-              type="button"
-              className="startup-alert-dismiss"
-              aria-label="關閉提示"
-              onClick={() => {
-                setDismissedAlert(visibleAlerts);
-                writeDismissedAlert(visibleAlerts);
-              }}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        )}
         <TopBar />
         <TerminalDock />
       </section>
@@ -540,26 +516,6 @@ function recoverSelectedTerminal(reason: string): void {
   const state = useAppStore.getState();
   const terminalId = state.dockLayout.selectedTerminalId;
   if (terminalId) state.requestTerminalRecovery(terminalId, reason);
-}
-
-const DISMISSED_ALERT_KEY = "coterm.startupAlert.dismissed";
-
-// Safari private mode throws on localStorage access; a throw here must not take
-// the banner (or the dismiss click) down with it.
-function readDismissedAlert(): string {
-  try {
-    return localStorage.getItem(DISMISSED_ALERT_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeDismissedAlert(value: string): void {
-  try {
-    localStorage.setItem(DISMISSED_ALERT_KEY, value);
-  } catch {
-    // Dismissal stays session-only when storage is unavailable.
-  }
 }
 
 // 修法方向 B (2026-10-09): app-root fallback. useI18n() runs off the zustand

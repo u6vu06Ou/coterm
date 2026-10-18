@@ -1539,51 +1539,6 @@ kbd {
   overflow: hidden;
 }
 
-.workspace-shell.has-startup-alerts {
-  grid-template-rows: auto 40px minmax(0, 1fr);
-}
-
-.startup-alert-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  max-height: 112px;
-  padding: 9px 14px;
-  overflow: auto;
-  border-bottom: 1px solid color-mix(in srgb, #f4b942 48%, var(--border));
-  background: color-mix(in srgb, #f4b942 14%, var(--surface));
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-}
-
-.startup-alert-banner svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: #f4b942;
-}
-
-.startup-alert-dismiss {
-  flex: 0 0 auto;
-  margin-left: auto;
-  padding: 4px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.startup-alert-dismiss:hover {
-  background: color-mix(in srgb, #f4b942 22%, transparent);
-  color: var(--text);
-}
-
-.startup-alert-dismiss svg {
-  color: inherit;
-}
-
 .topbar {
   display: flex;
   min-width: 0;
@@ -7138,10 +7093,6 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
     /* The 48px single-row topbar stays intrinsic; its menu overlays the dock
        instead of adding a second grid row. */
     grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .workspace-shell.has-startup-alerts {
-    grid-template-rows: auto auto minmax(0, 1fr);
   }
 
   .topbar {

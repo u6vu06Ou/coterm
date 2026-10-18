@@ -340,24 +340,31 @@ function claudeSlot(entry: unknown, source: "claude" | "codex", mtimeMs: number)
  * window to either slot depending on the account/plan.
  */
 export async function readCodexUsage(sessionsRoot: string): Promise<UsageSlot | null> {
-  const newest = await findNewestRollout(sessionsRoot);
-  if (!newest) return null;
-  const slot = await readCodexRolloutTail(newest.file);
-  if (slot) return slot;
+  // The newest rollout is often one with no token_count yet (a session that just
+  // started, or a free proxy-backed Codex that never reports rate limits), so the
+  // HUD went blank. Walk recent rollouts newest-first and take the first real reading.
+  for (const rollout of await findRecentRollouts(sessionsRoot, CODEX_ROLLOUT_SCAN_LIMIT)) {
+    const slot = await readCodexRolloutTail(rollout.file, rollout.mtimeMs);
+    if (slot) return slot;
+  }
   return null;
 }
 
-/** Resolve the most-recently-modified rollout-*.jsonl under sessionsRoot. */
-export async function findNewestRollout(
+const CODEX_ROLLOUT_SCAN_LIMIT = 40;
+
+/** Most-recently-modified rollout-*.jsonl files under sessionsRoot, newest first, at most `limit`. */
+export async function findRecentRollouts(
   sessionsRoot: string,
-): Promise<{ file: string; mtimeMs: number } | null> {
+  limit: number,
+): Promise<Array<{ file: string; mtimeMs: number }>> {
   // Codex nests sessions/YYYY/MM/DD/rollout-*.jsonl. Walk year dirs newest-first.
   let years: string[];
   try {
     years = await readdir(sessionsRoot);
   } catch {
-    return null;
+    return [];
   }
+  const out: Array<{ file: string; mtimeMs: number }> = [];
   const yearStats = await statsFor(sessionsRoot, years);
   yearStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
   for (const year of yearStats) {
@@ -369,11 +376,14 @@ export async function findNewestRollout(
       for (const day of days) {
         const files = await listRollouts(day.path);
         files.sort((a, b) => b.mtimeMs - a.mtimeMs);
-        if (files.length > 0) return files[0]!;
+        for (const file of files) {
+          out.push(file);
+          if (out.length >= limit) return out;
+        }
       }
     }
   }
-  return null;
+  return out;
 }
 
 async function listDirs(parent: string): Promise<Array<{ path: string; mtimeMs: number }>> {

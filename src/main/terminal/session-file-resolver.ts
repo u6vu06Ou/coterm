@@ -1,5 +1,5 @@
 import { open, readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { canonicalPath } from "../core/claude-history";
 
 export type ResolvedSessionStatus = "ready" | "pending" | "not_found" | "ambiguous" | "unsupported";
@@ -11,6 +11,8 @@ export interface TerminalSessionDescriptor {
   startedAt: string;
   nativeSessionId: string | null;
   provider: SessionProvider;
+  /** Native session ids owned by OTHER live terminals — never hop onto those files. */
+  reservedSessionIds?: readonly string[];
 }
 
 export interface ResolvedSessionFile {
@@ -19,12 +21,25 @@ export interface ResolvedSessionFile {
   file: string | null;
   binding: "native-id" | "cwd-start-time" | "none";
   reasonCode?: string;
+  /** Set when the agent moved to a new session file inside the same terminal (/clear, /new, /resume). */
+  reboundSessionId?: string;
 }
 
 interface Candidate {
   file: string;
   mtimeMs: number;
+  /** When the file was created (birthtime, ctime fallback). */
+  bornMs: number;
   startedAtMs?: number;
+}
+
+// A session file counts as "replaced" only when the successor was born no
+// earlier than this long before the old file's last write — /clear, /new and
+// an in-session /resume all stop writing the old file as the new one starts.
+const SUCCESSOR_SLACK_MS = 5_000;
+
+function sessionIdOf(file: string): string {
+  return basename(file, ".jsonl");
 }
 
 export function mungeClaudeCwd(cwd: string): string {
@@ -67,34 +82,73 @@ export class TerminalSessionFileResolver {
 
   private async resolveClaude(descriptor: TerminalSessionDescriptor): Promise<ResolvedSessionFile> {
     const folder = join(this.options.claudeProjectsRoot, mungeClaudeCwd(descriptor.cwd));
+    const startedMs = Date.parse(descriptor.startedAt);
+    let anchor: string | null = null;
+    let binding: ResolvedSessionFile["binding"] = "cwd-start-time";
     if (descriptor.nativeSessionId) {
       const file = join(folder, `${descriptor.nativeSessionId}.jsonl`);
-      if (await exists(file)) {
-        this.bindings.set(descriptor.terminalId, file);
-        return { status: "ready", provider: "claude", file, binding: "native-id" };
-      }
-      return { status: "pending", provider: "claude", file: null, binding: "native-id", reasonCode: "native_session_not_created" };
+      // Keep following a hop made earlier (the native id may lag one refresh behind).
+      const bound = this.bindings.get(descriptor.terminalId);
+      if (await exists(file)) anchor = bound && await exists(bound) ? bound : file;
+      else if (bound && await exists(bound)) anchor = bound;
+      else return { status: "pending", provider: "claude", file: null, binding: "native-id", reasonCode: "native_session_not_created" };
+      binding = "native-id";
     }
     const candidates = await this.listJsonl(folder);
-    const startedMs = Date.parse(descriptor.startedAt);
-    const live = Number.isFinite(startedMs)
-      ? candidates.filter((candidate) => candidate.mtimeMs >= startedMs - 60_000)
-      : candidates;
-    if (live.length === 0) return { status: "not_found", provider: "claude", file: null, binding: "none", reasonCode: "no_matching_session" };
-    if (live.length > 1) return { status: "ambiguous", provider: "claude", file: null, binding: "none", reasonCode: "multiple_matching_sessions" };
-    const file = live[0]!.file;
+    const reserved = this.reservedFiles(descriptor, candidates);
+    if (!anchor) {
+      const bound = this.bindings.get(descriptor.terminalId);
+      if (bound && await exists(bound)) {
+        anchor = bound;
+      } else {
+        const live = (Number.isFinite(startedMs)
+          ? candidates.filter((candidate) => candidate.mtimeMs >= startedMs - 60_000)
+          : candidates).filter((candidate) => !reserved.has(candidate.file.toLowerCase()));
+        if (live.length === 0) return { status: "not_found", provider: "claude", file: null, binding: "none", reasonCode: "no_matching_session" };
+        if (live.length > 1) return { status: "ambiguous", provider: "claude", file: null, binding: "none", reasonCode: "multiple_matching_sessions" };
+        anchor = live[0]!.file;
+      }
+    }
+    const file = followSuccessors(anchor, candidates, reserved, startedMs);
     this.bindings.set(descriptor.terminalId, file);
-    return { status: "ready", provider: "claude", file, binding: "cwd-start-time" };
+    const rebound = descriptor.nativeSessionId !== null && sessionIdOf(file) !== descriptor.nativeSessionId;
+    return {
+      status: "ready", provider: "claude", file, binding,
+      ...(rebound ? { reboundSessionId: sessionIdOf(file) } : {}),
+    };
+  }
+
+  /** Files that belong to other terminals: their native ids and their current bindings. */
+  private reservedFiles(descriptor: TerminalSessionDescriptor, candidates: Candidate[]): Set<string> {
+    const reserved = new Set([...this.bindings.entries()]
+      .filter(([id]) => id !== descriptor.terminalId).map(([, file]) => file.toLowerCase()));
+    const ids = (descriptor.reservedSessionIds ?? []).map((id) => id.toLowerCase());
+    for (const candidate of candidates) {
+      const name = basename(candidate.file).toLowerCase();
+      if (ids.some((id) => name === `${id}.jsonl` || name.endsWith(`-${id}.jsonl`))) reserved.add(candidate.file.toLowerCase());
+    }
+    return reserved;
   }
 
   private async resolveCodex(descriptor: TerminalSessionDescriptor): Promise<ResolvedSessionFile> {
-    const bound = this.bindings.get(descriptor.terminalId);
-    if (bound && await exists(bound)) return { status: "ready", provider: "codex", file: bound, binding: descriptor.nativeSessionId ? "native-id" : "cwd-start-time" };
-    if (bound) this.bindings.delete(descriptor.terminalId);
     const startedMs = Date.parse(descriptor.startedAt);
     if (!Number.isFinite(startedMs)) return { status: "not_found", provider: "codex", file: null, binding: "none", reasonCode: "invalid_started_at" };
     const candidates = await this.listCodexRollouts(startedMs);
-    const reserved = new Set([...this.bindings.entries()].filter(([id]) => id !== descriptor.terminalId).map(([, file]) => file.toLowerCase()));
+    const reserved = this.reservedFiles(descriptor, candidates);
+    const bound = this.bindings.get(descriptor.terminalId);
+    if (bound && await exists(bound)) {
+      // A /new (or resume) inside the same Codex starts a fresh rollout in this cwd; follow it.
+      const sameCwdCandidates: Candidate[] = [];
+      for (const candidate of candidates) {
+        if (candidate.file.toLowerCase() === bound.toLowerCase()) { sameCwdCandidates.push(candidate); continue; }
+        const meta = await readCodexSessionMeta(candidate.file);
+        if (meta && sameCwd(meta.cwd ?? "", descriptor.cwd)) sameCwdCandidates.push(candidate);
+      }
+      const file = followSuccessors(bound, sameCwdCandidates, reserved, startedMs);
+      this.bindings.set(descriptor.terminalId, file);
+      return { status: "ready", provider: "codex", file, binding: descriptor.nativeSessionId ? "native-id" : "cwd-start-time" };
+    }
+    if (bound) this.bindings.delete(descriptor.terminalId);
     const exact = descriptor.nativeSessionId
       ? candidates.find((candidate) => candidate.file.toLowerCase().endsWith(`-${descriptor.nativeSessionId!.toLowerCase()}.jsonl`) && !reserved.has(candidate.file.toLowerCase()))
       : undefined;
@@ -123,15 +177,16 @@ export class TerminalSessionFileResolver {
       if (!name.endsWith(".jsonl")) continue;
       const file = join(folder, name);
       const info = await stat(file).catch(() => null);
-      if (info) candidates.push({ file, mtimeMs: info.mtimeMs });
+      if (info) candidates.push({ file, mtimeMs: info.mtimeMs, bornMs: info.birthtimeMs || info.ctimeMs });
     }
     return candidates;
   }
 
   private async listCodexRollouts(startedMs: number): Promise<Candidate[]> {
     const directories = new Set<string>();
-    for (const offset of [-1, 0, 1]) {
-      const date = new Date(startedMs + offset * 86_400_000);
+    // Around the terminal's start, plus today: a terminal left open for days still finds a fresh /new rollout.
+    for (const anchorMs of [startedMs - 86_400_000, startedMs, startedMs + 86_400_000, Date.now()]) {
+      const date = new Date(anchorMs);
       directories.add(join(this.options.codexSessionsRoot, String(date.getFullYear()), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")));
       directories.add(join(this.options.codexSessionsRoot, String(date.getUTCFullYear()), String(date.getUTCMonth() + 1).padStart(2, "0"), String(date.getUTCDate()).padStart(2, "0")));
     }
@@ -143,10 +198,36 @@ export class TerminalSessionFileResolver {
         if (!name.startsWith("rollout-") || !name.endsWith(".jsonl")) continue;
         const file = join(directory, name);
         const info = await stat(file).catch(() => null);
-        if (info && info.mtimeMs >= startedMs - 60_000) out.push({ file, mtimeMs: info.mtimeMs });
+        if (info && info.mtimeMs >= startedMs - 60_000) out.push({ file, mtimeMs: info.mtimeMs, bornMs: info.birthtimeMs || info.ctimeMs });
       }
     }
     return out;
+  }
+}
+
+/**
+ * Walk from the terminal's current session file to the file the agent is writing now. A successor
+ * must be unclaimed, born after the terminal started, and born no earlier than the current file's
+ * last write (minus slack). Only an unambiguous single successor is followed at each step.
+ */
+function followSuccessors(anchor: string, candidates: Candidate[], reserved: Set<string>, startedMs: number): string {
+  const byFile = new Map(candidates.map((candidate) => [candidate.file.toLowerCase(), candidate]));
+  const visited = new Set<string>();
+  let current = anchor;
+  for (;;) {
+    const key = current.toLowerCase();
+    visited.add(key);
+    const currentInfo = byFile.get(key);
+    if (!currentInfo) return current;
+    const next = candidates.filter((candidate) => {
+      const candidateKey = candidate.file.toLowerCase();
+      return !visited.has(candidateKey) && !reserved.has(candidateKey)
+        && (!Number.isFinite(startedMs) || candidate.bornMs >= startedMs - 60_000)
+        && candidate.bornMs >= currentInfo.mtimeMs - SUCCESSOR_SLACK_MS
+        && candidate.mtimeMs > currentInfo.mtimeMs;
+    });
+    if (next.length !== 1) return current;
+    current = next[0]!.file;
   }
 }
 

@@ -9,6 +9,7 @@ import {
   readClaudeAccessToken,
   readClaudeUsage,
   readCodexRolloutTail,
+  readCodexUsage,
   UsageMonitor,
 } from "../../src/main/terminal/usage-monitor";
 
@@ -162,6 +163,27 @@ describe("parseCodexTokenCount", () => {
       },
     };
     expect(parseCodexTokenCount(record, mtime)?.percent).toBe(100);
+  });
+});
+
+describe("readCodexUsage", () => {
+  it("skips newer rollouts that carry no rate-limit reading", async () => {
+    const root = await mkdtemp(join(tmpdir(), "coterm-codex-usage-"));
+    const day = join(root, "2026", "10", "18");
+    await mkdir(day, { recursive: true });
+    const withReading = join(day, "rollout-a.jsonl");
+    await writeFile(withReading, JSON.stringify({
+      payload: { type: "token_count", rate_limits: { primary: { used_percent: 6, window_minutes: 10080, resets_at: 1 } } },
+    }) + "\n", "utf8");
+    const past = new Date(Date.now() - 60_000);
+    await utimes(withReading, past, past);
+    // Newest file: a just-started (or free proxy) session with no token_count at all.
+    await writeFile(join(day, "rollout-b.jsonl"), JSON.stringify({ type: "session_meta", payload: {} }) + "\n", "utf8");
+    try {
+      expect((await readCodexUsage(root))?.percent).toBe(6);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
