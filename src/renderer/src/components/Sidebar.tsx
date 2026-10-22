@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useShallow } from "zustand/react/shallow";
 import { isPendingProject, useAppStore } from "../store/app-store";
 import { useI18n } from "../i18n";
 import type { MessageKey, TranslationVariables } from "../i18n";
@@ -64,7 +65,25 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
     appVersion,
     dockLayout,
     ptyStates,
-  } = useAppStore();
+  } = useAppStore(useShallow((s) => ({
+    projects: s.projects,
+    archivedProjects: s.archivedProjects,
+    createProject: s.createProject,
+    renameProject: s.renameProject,
+    pinProject: s.pinProject,
+    reorderProjects: s.reorderProjects,
+    archiveProject: s.archiveProject,
+    restoreProject: s.restoreProject,
+    deleteProject: s.deleteProject,
+    openTile: s.openTile,
+    openSandboxAgent: s.openSandboxAgent,
+    openWorktreeDialog: s.openWorktreeDialog,
+    setPickerState: s.setPickerState,
+    settings: s.settings,
+    appVersion: s.appVersion,
+    dockLayout: s.dockLayout,
+    ptyStates: s.ptyStates,
+  })));
   const { t } = useI18n();
   // f2: sidebar session branches are a DESKTOP feature (HTML5 drag into the
   // dock). Web/mobile keep the fullscreen history panel untouched.

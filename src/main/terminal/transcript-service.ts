@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TerminalTranscript, TerminalTranscriptMessage } from "@shared/types";
-import { TerminalSessionFileResolver, type SessionProvider } from "./session-file-resolver";
+import { TerminalSessionFileResolver, type ResolvedSessionFile, type SessionProvider } from "./session-file-resolver";
 import { IncrementalTranscriptCache, TranscriptParserRegistry } from "./transcript-parser-registry";
 
 export interface TerminalTranscriptQuery {
@@ -26,6 +26,22 @@ export class TerminalTranscriptService {
       claudeProjectsRoot: options.claudeProjectsRoot ?? join(homedir(), ".claude", "projects"),
       codexSessionsRoot: options.codexSessionsRoot ?? join(homedir(), ".codex", "sessions"),
     });
+  }
+
+  /**
+   * Where the session file resolver currently points this terminal (the same
+   * binding + rebind logic as `get`, minus the parsing). Used by the pane
+   * header "Session 資訊" block, which only needs the absolute path.
+   */
+  async resolveSessionFile(query: TerminalTranscriptQuery): Promise<ResolvedSessionFile> {
+    const provider = providerFor(query.agentProfile);
+    if (provider === "unsupported") {
+      return { status: "unsupported", provider, file: null, binding: "none", reasonCode: "provider_not_supported" };
+    }
+    const { onRebind, ...descriptor } = query;
+    const resolved = await this.resolver.resolve({ ...descriptor, provider });
+    if (resolved.reboundSessionId) onRebind?.(resolved.reboundSessionId);
+    return resolved;
   }
 
   async get(query: TerminalTranscriptQuery): Promise<TerminalTranscript> {

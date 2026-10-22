@@ -5489,8 +5489,33 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
   display: flex;
   min-width: 0;
   min-height: 0;
+  flex: 1;
   flex-direction: column;
   gap: 4px;
+}
+
+/* The frame must fill the remaining panel space. An iframe without explicit
+   sizing falls back to its 300x150 default (the .artifact-viewer > iframe rule
+   only matches direct children, and this frame is nested one level down), which
+   is why HTML previews used to render as a small scrollable box. */
+.html-viewer-frame-box {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.html-viewer-frame-box > iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  /* Fit mode scales from the top-left corner so the shrunk page still starts
+     at the box corner instead of drifting around its center. */
+  transform-origin: 0 0;
 }
 
 .html-viewer-toolbar {
@@ -7848,10 +7873,15 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
   padding-top: 4px;
   border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
 }
+/* 2026-10-23 regression note: a stray icon-row restyle of this class lived at
+   the bottom of this file (see git) and squeezed every labelled button to a
+   fixed 32px square, wrapping Chinese labels one character per line. Icon-only
+   tools (search/attach) now have their own class, .xterm-header-menu-icons. */
 .xterm-header-menu-actions button {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   height: 30px;
   padding: 0 8px;
   border: 0;
@@ -7862,6 +7892,87 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
   font-weight: 600;
   text-align: left;
   cursor: pointer;
+}
+.xterm-header-menu-actions button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Icon-only tools (search/attach): one horizontal row of square buttons. */
+.xterm-header-menu-icons {
+  display: flex;
+  gap: 10px;
+  padding: 2px 8px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.xterm-header-menu-icons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  cursor: pointer;
+}
+.xterm-header-menu-icons button:hover {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+/* "Session 資訊" block (2026-10-23): selectable key/value rows + the
+   copy-for-agent button. Values are mono, wrap anywhere, and user-selectable
+   so the user or a script can lift the session id / path out of the menu. */
+.xterm-header-menu-session {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+.xterm-header-menu-session-title {
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.xterm-header-menu-session-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.xterm-header-menu-session-key {
+  flex: 0 0 72px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.xterm-header-menu-session-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mono-font, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.xterm-header-menu-session button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: stretch;
+  height: 28px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.xterm-header-menu-session button:hover {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
 }
 .xterm-header-menu-actions button:hover {
   background: color-mix(in srgb, var(--text) 8%, transparent);
@@ -9147,9 +9258,10 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
 .xterm-pane-frame > header .xterm-attention-badge { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xterm-header-menu-meta { display: grid; gap: 5px; padding: 6px 8px; font-size: 12px; overflow-wrap: anywhere; color: var(--text-soft); }
 .xterm-header-menu-meta strong { color: var(--text); }
-.xterm-header-menu-actions { display: flex; gap: 10px; padding: 4px 8px 8px; border-bottom: 1px solid var(--border); }
-.xterm-header-menu-actions button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 5px; color: var(--text); background: var(--surface-hover); cursor: pointer; }
-.xterm-header-menu-actions button:hover { background: var(--border); }
+/* The stray `.xterm-header-menu-actions` icon-row rules that used to live here
+   (fixed 32px square buttons) squeezed every labelled menu button to one
+   character per line — removed 2026-10-23; the icon row is now
+   `.xterm-header-menu-icons` in the menu block above. */
 .xterm-header-identity { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; overflow: hidden; }
 .xterm-pane-frame > header .xterm-header-identity .xterm-agent-label { flex: none; line-height: 16px; }
 .xterm-cwd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 400; line-height: 15px; color: var(--text-soft); }

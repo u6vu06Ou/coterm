@@ -869,6 +869,13 @@ export class PtyManager {
     // final bytes before the exit event (2026-09-27).
     this._flushOutput(terminal);
     this.claudeKeepalive.remove(terminalId);
+    // Drop any queued shell-ready writes: the native onExit cleanup is
+    // detached below, so without this a terminal killed while booting leaks
+    // its shellReadyQueues/shellReadyTimers entries forever.
+    const shellReadyTimer = this.shellReadyTimers.get(terminalId);
+    if (shellReadyTimer) clearTimeout(shellReadyTimer);
+    this.shellReadyTimers.delete(terminalId);
+    this.shellReadyQueues.delete(terminalId);
     if (terminal.resizeTimer) clearTimeout(terminal.resizeTimer);
     if (terminal.quietTimer) {
       clearTimeout(terminal.quietTimer);
@@ -910,6 +917,18 @@ export class PtyManager {
   get(terminalId: string): TerminalInfo | null {
     const t = this.terminals.get(terminalId);
     return t ? t.info : null;
+  }
+
+  /**
+   * Session restore (2026-10-23): the pane's CURRENT working directory —
+   * OSC 633 P;Cwd when the shell reported one (user cd'd after spawn),
+   * falling back to the spawn cwd. TerminalInfo.cwd stays the spawn value,
+   * so snapshotting cwd without this accessor would lose manual cd's.
+   */
+  getLiveCwd(terminalId: string): string | null {
+    const t = this.terminals.get(terminalId);
+    if (!t) return null;
+    return t.shellCwd || t.info.cwd || null;
   }
 
   /** When the user last pressed Enter in this agent pane (null = never). */

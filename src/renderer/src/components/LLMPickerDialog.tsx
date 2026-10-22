@@ -2,6 +2,7 @@ import { Check, Copy, Crown, RefreshCw, Terminal as TerminalIcon, X } from "luci
 import { useEffect, useRef, useState } from "react";
 import { pickerBackendGroups, type PickerBackendRow } from "@shared/agent-options";
 import type { AgentOption, ProviderProbeState } from "@shared/types";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import { useI18n } from "../i18n";
 import { interactiveAgent, type InteractiveAgentId } from "./interactive-agent";
@@ -23,7 +24,14 @@ const HARNESS_LABEL: Record<AgentOption["harness"], string> = {
 };
 
 export function LLMPickerDialog(): React.JSX.Element | null {
-  const { providers, pickerState, setPickerState, settings, agentOptions, openTile } = useAppStore();
+  const { providers, pickerState, setPickerState, settings, agentOptions, openTile } = useAppStore(useShallow((s) => ({
+    providers: s.providers,
+    pickerState: s.pickerState,
+    setPickerState: s.setPickerState,
+    settings: s.settings,
+    agentOptions: s.agentOptions,
+    openTile: s.openTile,
+  })));
   const probing = useAppStore((s) => s.providersProbing);
   const refreshProviders = useAppStore((s) => s.refreshProviders);
   const { t } = useI18n();

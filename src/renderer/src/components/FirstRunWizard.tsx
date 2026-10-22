@@ -1,6 +1,7 @@
 import { Check, ChevronRight, FolderOpen, Globe, Keyboard, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "@shared/types";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import { onboardingCompletePatch } from "../store/settings-patches";
 import { useI18n } from "../i18n";
@@ -20,7 +21,13 @@ function detectBrowserLocale(): AppSettings["locale"] {
 const WIZARD_STEP_COUNT = 6;
 
 export function FirstRunWizard(): React.JSX.Element | null {
-  const { settings, providers, projects, createProject, updateSettings } = useAppStore();
+  const { settings, providers, projects, createProject, updateSettings } = useAppStore(useShallow((s) => ({
+    settings: s.settings,
+    providers: s.providers,
+    projects: s.projects,
+    createProject: s.createProject,
+    updateSettings: s.updateSettings,
+  })));
   const { t } = useI18n();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<AppSettings | null>(settings);

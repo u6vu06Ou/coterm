@@ -769,6 +769,8 @@
   font-family: var(--sm-ui);
 }
 :root[data-skin="sunmoon"] .xterm-header-menu-actions button:hover,
+:root[data-skin="sunmoon"] .xterm-header-menu-icons button:hover,
+:root[data-skin="sunmoon"] .xterm-header-menu-session button:hover,
 :root[data-skin="sunmoon"] .xterm-header-menu .xterm-font-step:hover {
   background: var(--sm-accent-wash);
   color: var(--text);

@@ -10,6 +10,7 @@ import { activeTurnTick, layoutTurnTicks, ticksEqual, TURN_RAIL_MIN_GAP, TURN_RA
 import type { TurnTick, TurnTickInput } from "./terminal-reader-turns";
 import { ConversationReader } from "./ConversationReader";
 import { buildCopyAllText, keepFinalTurnOutputs, pinchReaderFontSize, terminalReaderController } from "./terminal-reader-state";
+import { mergeTranscriptMessages } from "./terminal-reader-merge";
 import { copyTextToClipboard } from "./clipboard";
 import { mobileInputController } from "../mobile/mobile-input-controller";
 import { useComposerFocusOwnership } from "../mobile/use-composer-focus";
@@ -342,7 +343,10 @@ export function TerminalReaderOverlay({
   // Live-view polling: while the reader is open, refresh the transcript —
   // every ~2s while the agent works, every ~5s otherwise (state detection can
   // miss a busy agent, and that must not freeze the view). No loading state
-  // here — old content stays until the new arrives.
+  // here — old content stays until the new arrives. mergeTranscriptMessages
+  // makes an unchanged poll a no-op state write: identical content returns the
+  // previous array reference, React bails out, and nothing re-renders, so the
+  // view stays still and unread rows are never re-highlighted.
   useEffect(() => {
     if (!reader.open || !active) return;
     let alive = true;
@@ -350,7 +354,7 @@ export function TerminalReaderOverlay({
       refresh();
       void window.aiTerminal.getTerminalTranscript(terminalId).then((result: TerminalTranscript) => {
         if (!alive) return;
-        setMessages(result.messages);
+        setMessages((previous) => mergeTranscriptMessages(previous, result.messages));
         setStatus(result.status === "ready" || result.status === "empty" ? result.status : (result.status ?? "empty"));
       }).catch(() => {
         // Background refresh failure: keep the old content on screen.
@@ -373,7 +377,7 @@ export function TerminalReaderOverlay({
     if (prev === "working" && tone === "ready") {
       refresh();
       void window.aiTerminal.getTerminalTranscript(terminalId).then((result: TerminalTranscript) => {
-        setMessages(result.messages);
+        setMessages((previous) => mergeTranscriptMessages(previous, result.messages));
         setStatus(result.status === "ready" || result.status === "empty" ? result.status : (result.status ?? "empty"));
       }).catch(() => {
         // Keep the last polled content on a failed final refresh.
@@ -502,7 +506,7 @@ export function TerminalReaderOverlay({
     });
     void window.aiTerminal.getTerminalTranscript(terminalId).then((result: TerminalTranscript) => {
       if (cancelled) return;
-      setMessages(result.messages);
+      setMessages((previous) => mergeTranscriptMessages(previous, result.messages));
       setStatus(result.status === "ready" || result.status === "empty" ? result.status : (result.status ?? "empty"));
     }).catch(() => {
       if (!cancelled) setStatus("error");
@@ -581,7 +585,7 @@ export function TerminalReaderOverlay({
         )}
         <button data-action-id="terminal.reader.search.open" type="button" aria-label={t("reader.search.placeholder")} onClick={openSearch}><SearchIcon size={16} /></button>
         {!isPhone && (
-          <button data-action-id="terminal.reader.refresh" type="button" aria-label="重新整理" onClick={() => { refresh(); setStatus("loading"); setRefreshGeneration((value) => value + 1); }}>重新整理</button>
+          <button data-action-id="terminal.reader.refresh" type="button" aria-label="重新整理" onClick={() => { refresh(); if (status !== "ready") setStatus("loading"); setRefreshGeneration((value) => value + 1); }}>重新整理</button>
         )}
 
       </div>

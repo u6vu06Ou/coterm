@@ -1,5 +1,6 @@
 import { GitBranch, X } from "lucide-react";
 import { useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import { useI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
@@ -46,7 +47,21 @@ export function WorktreeManagerDialog(): React.JSX.Element | null {
     abortWorktreeAction,
     cleanupWorktreeAction,
     resumeWorktreeAction,
-  } = useAppStore();
+  } = useAppStore(useShallow((s) => ({
+    worktrees: s.worktrees,
+    worktreeDialogOpen: s.worktreeDialogOpen,
+    worktreeDialogProjectId: s.worktreeDialogProjectId,
+    worktreeBusyId: s.worktreeBusyId,
+    worktreeDiffById: s.worktreeDiffById,
+    worktreeError: s.worktreeError,
+    projects: s.projects,
+    closeWorktreeDialog: s.closeWorktreeDialog,
+    refreshWorktreeDiff: s.refreshWorktreeDiff,
+    mergeWorktreeAction: s.mergeWorktreeAction,
+    abortWorktreeAction: s.abortWorktreeAction,
+    cleanupWorktreeAction: s.cleanupWorktreeAction,
+    resumeWorktreeAction: s.resumeWorktreeAction,
+  })));
   const { t } = useI18n();
 
   useEffect(() => {

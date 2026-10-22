@@ -1,9 +1,56 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Check as CheckIcon, Copy as CopyIcon } from "lucide-react";
 import type { TerminalTranscriptMessage } from "@shared/types";
 import { MarkdownContent } from "../MarkdownContent";
 import { readerMessageLabel } from "./terminal-reader-state";
 import { copyTextToClipboard } from "./clipboard";
+
+// One message row, memoized: the reader refetches the transcript while it is
+// open, and mergeTranscriptMessages keeps unchanged messages reference-stable,
+// so an already-on-screen row renders once and never re-runs markdown /
+// syntax highlighting again (the re-highlight was the visible color flash on
+// every refresh).
+const ReaderMessageRow = memo(function ReaderMessageRow({
+  message,
+  messageKey,
+  index,
+  feedback,
+  isNewestAssistant,
+  onCopy,
+}: {
+  message: TerminalTranscriptMessage;
+  messageKey: string;
+  index: number;
+  feedback: "ok" | "error" | null;
+  isNewestAssistant: boolean;
+  onCopy: (message: TerminalTranscriptMessage, key: string) => void;
+}): React.JSX.Element {
+  const label = readerMessageLabel(message);
+  const isSummary = message.kind === "turn_summary";
+  return (
+    <article
+      data-message-index={index}
+      data-turn-anchor={message.role === "user" ? index : undefined}
+      className={`terminal-reader-message terminal-reader-${message.role} ${isSummary ? "terminal-reader-summary" : ""} ${isNewestAssistant ? "terminal-reader-message-new" : ""}`}
+    >
+      <div className="terminal-reader-message-label">
+        <span>{label}</span>
+        <button
+          type="button"
+          data-action-id="terminal.reader.copy-message"
+          className="terminal-reader-copy-message"
+          aria-label={feedback ? (feedback === "ok" ? "已複製" : "複製失敗") : "複製這段"}
+          title="複製這段"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => onCopy(message, messageKey)}
+        >
+          {feedback ? (feedback === "ok" ? <CheckIcon size={14} aria-hidden /> : <span className="terminal-reader-copy-message-failed">複製失敗</span>) : <CopyIcon size={14} aria-hidden />}
+        </button>
+      </div>
+      {message.role === "assistant" ? <MarkdownContent className="terminal-reader-message-text final-answer" markdown={message.text} /> : <p className="terminal-reader-message-text">{message.text}</p>}
+    </article>
+  );
+});
 
 export function ConversationReader({ messages, emptyLabel, highlightLastAssistant = false }: { messages: TerminalTranscriptMessage[]; emptyLabel: string; highlightLastAssistant?: boolean }): React.JSX.Element {
   // Copy feedback per message ("已複製" check / "複製失敗") — one flash, 1.5s.
@@ -35,34 +82,18 @@ export function ConversationReader({ messages, emptyLabel, highlightLastAssistan
     <div className="terminal-reader-conversation">
       {messages.map((message, index) => {
         const messageKey = message.id ?? `${message.timestamp ?? "message"}-${index}`;
-        const label = readerMessageLabel(message);
-        const isSummary = message.kind === "turn_summary";
-        const feedback = copyFeedback !== null && copyFeedback.key === messageKey ? copyFeedback : null;
         // User messages anchor the turn rail's quick-jump ticks.
         const isNewestAssistant = highlightLastAssistant && index === lastAssistantIndex && message.role === "assistant";
         return (
-          <article
+          <ReaderMessageRow
             key={messageKey}
-            data-message-index={index}
-            data-turn-anchor={message.role === "user" ? index : undefined}
-            className={`terminal-reader-message terminal-reader-${message.role} ${isSummary ? "terminal-reader-summary" : ""} ${isNewestAssistant ? "terminal-reader-message-new" : ""}`}
-          >
-            <div className="terminal-reader-message-label">
-              <span>{label}</span>
-              <button
-                type="button"
-                data-action-id="terminal.reader.copy-message"
-                className="terminal-reader-copy-message"
-                aria-label={feedback ? (feedback.kind === "ok" ? "已複製" : "複製失敗") : "複製這段"}
-                title="複製這段"
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={() => copyMessage(message, messageKey)}
-              >
-                {feedback ? (feedback.kind === "ok" ? <CheckIcon size={14} aria-hidden /> : <span className="terminal-reader-copy-message-failed">複製失敗</span>) : <CopyIcon size={14} aria-hidden />}
-              </button>
-            </div>
-            {message.role === "assistant" ? <MarkdownContent className="terminal-reader-message-text final-answer" markdown={message.text} /> : <p className="terminal-reader-message-text">{message.text}</p>}
-          </article>
+            message={message}
+            messageKey={messageKey}
+            index={index}
+            feedback={copyFeedback !== null && copyFeedback.key === messageKey ? copyFeedback.kind : null}
+            isNewestAssistant={isNewestAssistant}
+            onCopy={copyMessage}
+          />
         );
       })}
     </div>

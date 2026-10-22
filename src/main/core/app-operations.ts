@@ -88,9 +88,9 @@ import type { WorktreeRegistry } from "../terminal/worktree-registry";
 import type { CheckpointManager } from "./checkpoint-manager";
 import { logger } from "./logger";
 import type { SessionIndex } from "./session-index";
-import type { DockLayout, TerminalWorkspaceState, AttentionNotification, Worktree, WorktreeMergeInput, Checkpoint, CheckpointDiff, CheckpointRestorePreview, UsageSnapshot, SystemActivity, AgentFileActivity, WorktreeRegistryActivity, SpreadsheetModel, PresentationModel, TerminalTranscript, AppSettings } from "@shared/types";
+import type { DockLayout, TerminalWorkspaceState, AttentionNotification, Worktree, WorktreeMergeInput, Checkpoint, CheckpointDiff, CheckpointRestorePreview, UsageSnapshot, SystemActivity, AgentFileActivity, WorktreeRegistryActivity, SpreadsheetModel, PresentationModel, TerminalTranscript, TerminalSessionInfo, AppSettings } from "@shared/types";
 import type { TerminalDashboardEntry, UiActionRecordInput } from "@shared/ipc";
-import { TerminalTranscriptService } from "../terminal/transcript-service";
+import { TerminalTranscriptService, providerFor } from "../terminal/transcript-service";
 import type { UsageMonitor } from "../terminal/usage-monitor";
 import type { ActivityMonitor } from "../terminal/activity-monitor";
 import type { BrowserRuntimeManager } from "../browser/browser-runtime-manager";
@@ -147,7 +147,7 @@ interface AppOperationsDependencies {
   checkpointer?: CheckpointManager;
   workspaceShell?: WorkspaceShell;
   browser?: BrowserRuntimeManager;
-  transcriptService?: Pick<TerminalTranscriptService, "get">;
+  transcriptService?: Pick<TerminalTranscriptService, "get" | "resolveSessionFile">;
   /** Codex Team config template dir (bundling contract); absent in tests. */
   codexTeamTemplateDir?: string;
 }
@@ -167,7 +167,7 @@ export interface TerminalWriteResult {
 }
 
 export class AppOperations {
-  private readonly transcriptService: Pick<TerminalTranscriptService, "get">;
+  private readonly transcriptService: Pick<TerminalTranscriptService, "get" | "resolveSessionFile">;
 
   constructor(private readonly dependencies: AppOperationsDependencies) {
     this.transcriptService = dependencies.transcriptService ?? new TerminalTranscriptService();
@@ -1191,6 +1191,55 @@ export class AppOperations {
       onRebind: (sessionId) => this.dependencies.terminals.setNativeSessionId(id, sessionId),
     });
   }
+  /**
+   * Pane-header "Session 資訊" block (2026-10-23): metadata-only session
+   * pointer for agent panes. The transcript path comes from the SAME
+   * session-file resolver the reader uses, so it follows /clear and in-session
+   * /resume hops; unresolved/ambiguous bindings simply return null fields and
+   * the renderer hides them. null return = plain shell pane (block hidden).
+   */
+  async getTerminalSessionInfo(terminalId: unknown): Promise<TerminalSessionInfo | null> {
+    const id = idSchema.parse(terminalId);
+    const terminal = this.dependencies.terminals.get(id);
+    if (!terminal || !terminal.isAgent) return null;
+    const provider = providerFor(terminal.agentProfile);
+    let nativeSessionId = terminal.nativeSessionId;
+    let transcriptPath: string | null = null;
+    try {
+      const resolved = await this.transcriptService.resolveSessionFile({
+        terminalId: id,
+        cwd: terminal.cwd,
+        startedAt: terminal.startedAt,
+        nativeSessionId: terminal.nativeSessionId,
+        agentProfile: terminal.agentProfile,
+        reservedSessionIds: this.dependencies.terminals.dashboardSnapshot()
+          .map(({ info: other }) => other.id !== id ? other.nativeSessionId : null)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        onRebind: (sessionId) => this.dependencies.terminals.setNativeSessionId(id, sessionId),
+      });
+      if (resolved.status === "ready" && resolved.file) transcriptPath = resolved.file;
+      if (resolved.reboundSessionId) nativeSessionId = resolved.reboundSessionId;
+    } catch {
+      /* best-effort: an unreadable sessions root leaves the path blank, not broken */
+    }
+    const resumeCommand =
+      provider === "claude" && nativeSessionId
+        ? `claude --resume ${nativeSessionId}`
+        : provider === "codex" && nativeSessionId
+          ? `codex resume ${nativeSessionId}`
+          : null;
+    return {
+      terminalId: id,
+      agentProfile: terminal.agentProfile,
+      provider,
+      nativeSessionId,
+      cwd: terminal.cwd,
+      pid: terminal.pid,
+      model: terminal.contextUsage?.model ?? null,
+      transcriptPath,
+      resumeCommand,
+    };
+  }
   markTerminalAgent(input: unknown) {
     const parsed = terminalMarkAgentInputSchema.parse(input);
     const info = this.dependencies.terminals.markAgent(parsed.terminalId, parsed.agentProfile);
@@ -1392,6 +1441,15 @@ export class AppOperations {
 
   getDockLayout(): Promise<DockLayout> {
     return this.dock.getDockLayout();
+  }
+
+  /**
+   * Session restore (2026-10-23): index.ts constructs SessionRestoreService
+   * with the dock manager. Public accessor instead of duplicated state; the
+   * manager is still created lazily on first dock access.
+   */
+  getDockManager(): DockLayoutManager {
+    return this.dock;
   }
 
   // --- A — Worktree sandbox + trusted resume --------------------------------

@@ -56,6 +56,7 @@ import type {
   TerminalSetNativeSessionIdInput,
   TerminalWorkspaceSaveInput,
   TerminalWorkspaceState,
+  TerminalSessionInfo,
   TerminalTranscript,
   TerminalWriteInput,
   WorkspaceEntry,
@@ -267,6 +268,7 @@ export const IPC = {
   terminalWorkspaceGet: "terminal:workspace:get",
   terminalWorkspaceSave: "terminal:workspace:save",
   terminalTranscriptGet: "terminal:transcript:get",
+  terminalSessionInfoGet: "terminal:session-info:get",
   terminalKill: "terminal:kill",
   terminalList: "terminal:list",
   terminalPtyState: "terminal:pty-state",
@@ -505,6 +507,10 @@ export interface AiTerminalApi {
   getTerminalDashboard(): Promise<TerminalDashboardEntry[]>;
   getTerminalWorkspace(projectId: string): Promise<TerminalWorkspaceState>;
   getTerminalTranscript(terminalId: string): Promise<TerminalTranscript>;
+  /** Pane-header "Session 資訊" block: profile, native id, absolute transcript
+   *  path (resolver-backed, follows /clear/hops), pid, resume command. Null
+   *  for plain shells. */
+  getTerminalSessionInfo(terminalId: string): Promise<TerminalSessionInfo | null>;
   refreshTerminal(terminalId: string): Promise<void>;
   saveTerminalWorkspace(input: TerminalWorkspaceSaveInput): Promise<void>;
   onEvent(callback: (event: NormalizedEvent) => void): () => void;

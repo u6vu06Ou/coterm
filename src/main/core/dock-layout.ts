@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import type { DockLayout, DockTile, TerminalLabel } from "@shared/types";
+import type { DockLayout, DockTile, TerminalInfo, TerminalLabel } from "@shared/types";
 import type { PtyManager } from "../terminal/pty-manager";
 import type { Repository } from "../storage/repository";
 import { assertAllowedPath } from "../security/path-policy";
@@ -13,6 +13,26 @@ import type { WorktreeManager } from "./worktree-manager";
 // own cap and a drift between the two makes the reported availableSlots a lie.
 const MAX_TILES = 12;
 const DOCK_LAYOUT_FILE = "dock-layout.json";
+
+/**
+ * Session restore (2026-10-23): everything needed to recreate one dock tile
+ * after an app restart. Terminal ids never survive a restart, so the snapshot
+ * (session-restore.json, owned by SessionRestoreService) carries the SPAWN
+ * description — cwd, shell profile, agent kind + its native session id —
+ * instead. The agent relaunch command itself is rebuilt at restore time by
+ * providers/agent-launch (never persisted verbatim, same trusted-resume rule
+ * as docs/AGENT_GUIDE.md §3).
+ */
+export interface DockRestoredPane {
+  projectId: string;
+  cwd: string;
+  profile: TerminalInfo["profile"];
+  isAgent: boolean;
+  agentProfile: string | null;
+  nativeSessionId: string | null;
+  worktreeId: string | null;
+  label: TerminalLabel | null;
+}
 
 function validFractions(values: number[]): boolean {
   return values.length > 0 && values.every((value) => Number.isFinite(value) && value > 0);
@@ -205,6 +225,123 @@ export class DockLayoutManager {
     await this.persist();
     this.broadcast();
     return this.layout;
+  }
+
+  /**
+   * Session restore (2026-10-23): recreate a whole snapshot in one pass —
+   * tile order preserved, selection by index, stored resize fractions reused
+   * when they still match the restored tile count (even split otherwise), and
+   * a single persist+broadcast at the end instead of one per tile.
+   *
+   * Refuses to run over a non-empty dock: restore happens only at startup
+   * (tiles are empty after boot), and clobbering live panes would kill the
+   * user's running PTYs. Panes whose project vanished or whose cwd fails the
+   * path policy are skipped individually; a pane whose stored cwd is gone
+   * falls back to the project workspace. Worktree panes rebind only while the
+   * worktree is still active. Agent RELAUNCH commands are the caller's job
+   * (SessionRestoreService writes them after this returns); this method only
+   * spawns the panes.
+   */
+  async restoreTiles(
+    panes: DockRestoredPane[],
+    options: {
+      selectedIndex: number | null;
+      rows: number[];
+      cols: number[][];
+      ptyCols: number;
+      ptyRows: number;
+    },
+  ): Promise<{ layout: DockLayout; created: Array<{ terminalId: string; pane: DockRestoredPane }> }> {
+    await this.ensureLoaded();
+    if (this.layout.tiles.length > 0) {
+      return { layout: this.layout, created: [] };
+    }
+    const settings = this.dependencies.repository.getSettings();
+    const created: Array<{ terminalId: string; pane: DockRestoredPane }> = [];
+    for (const pane of panes.slice(0, MAX_TILES)) {
+      const project = this.dependencies.repository.getProject(pane.projectId);
+      if (!project) continue;
+      const roots = [project.workspacePath, this.dependencies.userDataPath, this.dependencies.tempPath];
+      let cwd: string;
+      try {
+        cwd = await assertAllowedPath(pane.cwd, { roots });
+      } catch {
+        try {
+          cwd = await assertAllowedPath(project.workspacePath, { roots });
+        } catch {
+          continue;
+        }
+      }
+      let resolvedWorktreeId: string | undefined;
+      if (pane.worktreeId && this.dependencies.worktrees) {
+        const worktree = this.dependencies.worktrees.get(pane.worktreeId);
+        if (worktree && worktree.projectId === pane.projectId && worktree.status === "active") {
+          try {
+            cwd = await assertAllowedPath(worktree.worktreePath, {
+              roots: [join(this.dependencies.userDataPath, "worktrees")],
+            });
+            resolvedWorktreeId = pane.worktreeId;
+          } catch {
+            // Worktree directory gone out of band — keep the pane on its
+            // recorded/project cwd rather than dropping it.
+          }
+        }
+      }
+      // Same env injection as openTile: agent panes get their profile env at
+      // spawn so nothing secret echoes into the restored terminal.
+      const agentEnv = pane.agentProfile
+        ? buildProfileEnv(pane.agentProfile, settings.proxyUrl, buildActiveProfiles(settings.customProfiles))
+        : undefined;
+      let terminal: TerminalInfo;
+      try {
+        terminal = this.dependencies.terminals.create({
+          projectId: pane.projectId,
+          profile: pane.profile,
+          cwd,
+          isAgent: pane.isAgent,
+          agentProfile: pane.agentProfile,
+          agentEnv,
+          ...(resolvedWorktreeId ? { worktreeId: resolvedWorktreeId } : {}),
+          ...(pane.label ? { label: pane.label } : {}),
+        });
+      } catch (error) {
+        logger.warn("app", "dockLayout.restore.pane.failed", "Skipped a pane whose shell failed to spawn during session restore.", {
+          projectId: pane.projectId,
+          profile: pane.profile,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      created.push({ terminalId: terminal.id, pane });
+    }
+    const tiles: DockTile[] = created.map(({ terminalId, pane }) => ({
+      terminalId,
+      projectId: pane.projectId,
+      weight: 1,
+      agentProfile: pane.agentProfile ?? null,
+      label: pane.label ?? null,
+    }));
+    const selectedTerminalId = options.selectedIndex !== null
+      ? (created[options.selectedIndex]?.terminalId ?? created[0]?.terminalId ?? null)
+      : (created[0]?.terminalId ?? null);
+    this.layout = {
+      tiles,
+      selectedTerminalId,
+      exclusiveTerminalId: null,
+      rows: [],
+      cols: [],
+      ptyCols: Number.isInteger(options.ptyCols) && options.ptyCols >= 2 && options.ptyCols <= 1000 ? options.ptyCols : 100,
+      ptyRows: Number.isInteger(options.ptyRows) && options.ptyRows >= 1 && options.ptyRows <= 500 ? options.ptyRows : 28,
+    };
+    if (isDockLayoutShapeValid(options.rows, options.cols, tiles.length)) {
+      this.layout.rows = normalizeFractions(options.rows);
+      this.layout.cols = options.cols.map(normalizeFractions);
+    } else {
+      this.recomputeEvenSplit();
+    }
+    await this.persist();
+    this.broadcast();
+    return { layout: this.layout, created };
   }
 
   async closeTile(terminalId: string): Promise<DockLayout> {

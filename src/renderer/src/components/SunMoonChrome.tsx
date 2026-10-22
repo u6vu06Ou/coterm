@@ -124,10 +124,13 @@ export function SunMoonPulse() {
   });
   const canReveal = !isBrowser && revealProjectId !== null;
 
+  // Poll pauses while the window is hidden (or the sidebar collapsed, which
+  // unmounts this component) and resumes with an immediate tick on show, so a
+  // hidden window burns zero IPC instead of a no-op interval every 2s.
   useEffect(() => {
     let alive = true;
+    let intervalId: number | null = null;
     const tick = (): void => {
-      if (document.visibilityState === "hidden") return;
       void window.aiTerminal.getSystemActivity?.().then((next) => {
         if (!alive || !next) return;
         setActivity(next);
@@ -135,11 +138,26 @@ export function SunMoonPulse() {
         setRam((prev) => [...prev, next.memPercent].slice(-HISTORY));
       }).catch(() => undefined);
     };
-    tick();
-    const id = window.setInterval(tick, POLL_MS);
+    const start = (): void => {
+      if (intervalId !== null) return;
+      tick();
+      intervalId = window.setInterval(tick, POLL_MS);
+    };
+    const stop = (): void => {
+      if (intervalId === null) return;
+      window.clearInterval(intervalId);
+      intervalId = null;
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === "hidden") stop();
+      else start();
+    };
+    onVisibility();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       alive = false;
-      window.clearInterval(id);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 

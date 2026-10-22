@@ -1032,6 +1032,8 @@ export const appSettingsSchema = z.object({
   searchIndexEnabled: z.boolean().default(true),
   // 代理視窗完成／需要人工時的 Windows 原生通知（右下角 toast）。預設開。
   agentDoneToast: z.boolean().default(true),
+  // 重開時還原上次的 dock：窗格＋版面＋選取窗格，代理窗以原生 resume 接續對話。預設開。
+  restoreSessionOnLaunch: z.boolean().default(true),
   agentApi: z.object({
     enabled: z.boolean().default(true),
     token: z.string().default(""),
@@ -1234,6 +1236,7 @@ export const appSettingsPatchSchema = z.object({
   telemetry: z.literal(false).optional(),
   searchIndexEnabled: z.boolean().optional(),
   agentDoneToast: z.boolean().optional(),
+  restoreSessionOnLaunch: z.boolean().optional(),
   agentApi: z.object({
     enabled: z.boolean().optional(),
     token: z.string().optional(),

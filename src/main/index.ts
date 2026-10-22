@@ -30,6 +30,7 @@ import { startVoiceKeepalive } from "./voice/warmup";
 import { safeErrorMessage } from "./security/redaction";
 import { initLogger, logger, writeCrashLog } from "./core/logger";
 import { AppOperations } from "./core/app-operations";
+import { SessionRestoreService } from "./core/session-restore";
 import { ConversationSummarizer } from "./core/conversation-summarizer";
 import { TerminalHandoffService } from "./core/terminal-handoff-service";
 import { AgentApiOrchestrator } from "./core/agentapi-orchestrator";
@@ -113,6 +114,7 @@ let dailySummaryPending = false;
 let browserRuntime: BrowserRuntimeManager | null = null;
 let browserApproval: BrowserApprovalService | null = null;
 let browserSecrets: BrowserSecretVault | null = null;
+let sessionRestore: SessionRestoreService | null = null;
 
 process.on("unhandledRejection", (reason) => {
   logger.warn("app", "process.unhandledRejection", "Unhandled promise rejection", { reason: safeErrorMessage(reason) });
@@ -586,6 +588,32 @@ async function bootstrap(): Promise<void> {
     browser: browserRuntime,
     codexTeamTemplateDir,
   });
+  // Session restore (2026-10-23): snapshot the dock (panes + layout + selection
+  // + per-pane agent session id) on every layout change / once a minute / at
+  // clean quit, and rebuild it now — before any client connects — so the app
+  // comes back to the exact screen the user left. Agent panes relaunch with
+  // their provider resume command rebuilt from {profile, sessionId} metadata
+  // (buildAgentLaunchCommand; never a persisted command string).
+  sessionRestore = new SessionRestoreService({
+    userDataPath: app.getPath("userData"),
+    dock: operations.getDockManager(),
+    terminals,
+    events,
+    getEnabled: () => repository.getSettings().restoreSessionOnLaunch,
+    getProfileTable: () => buildActiveProfiles(repository.getSettings().customProfiles),
+  });
+  try {
+    const outcome = await sessionRestore.restore();
+    if (outcome.restored > 0) {
+      logger.info("app", "app.sessionRestore.boot", "Previous session restored at boot.", outcome);
+    }
+  } catch (error) {
+    // Restore is best-effort: a bad snapshot must never block app start.
+    logger.warn("app", "app.sessionRestore.bootFailed", "Session restore failed; starting with an empty dock.", {
+      error: safeErrorMessage(error),
+    });
+  }
+  sessionRestore.start();
   // Agent done-toast (2026-10-14): native Windows notification when an agent
   // pane finishes a turn or needs a human. Subscribes to ptyStateChanged on
   // the shared bus — the same chokepoint AttentionCenter uses — so
@@ -1018,6 +1046,10 @@ function registerLifecycle(): void {
     deadline.unref();
     void (async () => {
       try {
+        // Take the final session-restore snapshot FIRST, while PTYs are still
+        // alive (it reads live cwd + session ids), before anything is disposed.
+        await sessionRestore?.shutdown();
+        sessionRestore = null;
         // Stop accepting Agent API waits at the start of shutdown. Existing
         // waits resolve `shutdown`; any request racing the HTTP close gets 503.
         await agentapi?.shutdown();

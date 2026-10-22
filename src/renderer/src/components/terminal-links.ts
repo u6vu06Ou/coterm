@@ -534,3 +534,132 @@ export function multiRowLinkRangeForMatch(
     end: { x: endX, y: endY },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Hard-wrap detection (TUI rows that are NOT isWrapped).
+//
+// Agent TUIs (Claude Code / Codex, rendered with Ink) wrap long lines
+// THEMSELVES at the pane width and print each fragment as its own row, so
+// xterm never marks the continuation rows isWrapped. Every consumer that keys
+// off isWrapped (xterm's getSelection, WebLinksAddon's line joiner, the link
+// walk above) then sees N independent rows: a copied `…\OBSE` `RVATORY…html`
+// path paste gains a newline at the wrap point, and the link underlines only a
+// truncated fragment. The shared heuristic for "this row hard-wraps into the
+// next one": the row's real (non-padding) content reaches the last column, or
+// the last column MINUS 1 (a wide char that did not fit leaves the final cell
+// unwritten). Two guards keep full-width CHROME from being misread as a wrap:
+// rows whose last content char is box-drawing/block (╭─╮│╰╯ borders fill the
+// width by design) never wrap, and a continuation row starting with such a
+// char is likewise decorative. Trailing whitespace padding a TUI painted to
+// clear the row never counts as content — a padded short row ends short.
+
+// ─-╿ Box Drawing + ▀-▟ Block Elements: the character sets TUIs draw
+// boxes/bars with. Literal ranges match this file's existing CJK-range style.
+const BOX_EDGE_RE = /[─-╿▀-▟]/;
+/**
+ * True when this row's printed content ran out of columns and the line plausibly
+ * continued onto `nextCells` — a TUI hard wrap. `nextCells` undefined (no row
+ * below) and empty/all-blank next rows both report false.
+ */
+export function rowHardWrapsInto(
+  cells: readonly TerminalCellLike[],
+  nextCells: readonly TerminalCellLike[] | undefined,
+  cols: number,
+): boolean {
+  if (nextCells === undefined) return false;
+  const map = lineTextAndColumnMap(cells);
+  const trimmed = map.text.replace(/[ \t\u00a0]+$/u, "");
+  if (trimmed.length === 0) return false;
+  const lastIdx = trimmed.length - 1;
+  // indexToCol[lastIdx + 1] = exclusive end column of the last content cell
+  // (correct for wide chars: the +1 position is past all of the cell's cells).
+  const endCol = map.indexToCol[lastIdx + 1] ?? 0;
+  if (endCol < cols - 1) return false;
+  if (BOX_EDGE_RE.test(trimmed[lastIdx]!)) return false;
+  const nextFirst = lineTextAndColumnMap(nextCells).text.trimStart();
+  if (nextFirst.length === 0) return false;
+  if (BOX_EDGE_RE.test(nextFirst[0]!)) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Copy text across hard wraps.
+//
+// xterm.getSelection() joins rows with "\r\n" on Windows, merging ONLY soft-
+// wrapped (isWrapped) runs, so a TUI hard wrap lands in the clipboard as a real
+// newline (plus any padding spaces that survived trimming). The caller hands
+// the raw selection text plus one signal pair per SELECTED buffer row; rows
+// whose join signal is set are re-joined WITHOUT the newline, with the wrap
+// point stripped of padding (row's trailing whitespace) and the continuation
+// row's leading indent. Boundaries xterm already joined (soft wraps) keep
+// exactly the bytes getSelection produced — no double-trim, no reorder.
+// Returns null when the chunk/row bookkeeping disagrees (e.g. column-mode
+// selections slice wrapped rows apart); callers fall back to the legacy text.
+
+export interface SelectionRowSignals {
+  /** Next selected buffer row is isWrapped (xterm already joined it in). */
+  softWrapsNext: boolean;
+  /** rowHardWrapsInto(this row, next row) — join without a newline. */
+  hardWrapsNext: boolean;
+}
+
+export function joinHardWrappedSelection(
+  text: string,
+  rows: readonly SelectionRowSignals[],
+): string | null {
+  if (rows.length < 2) return text;
+  const chunks = text.split(/\r?\n/);
+  let expected = 1;
+  for (let k = 0; k < rows.length - 1; k += 1) {
+    if (!rows[k]!.softWrapsNext) expected += 1;
+  }
+  if (chunks.length !== expected) return null;
+  let out = chunks[0] ?? "";
+  let ci = 0;
+  for (let k = 0; k < rows.length - 1; k += 1) {
+    const row = rows[k]!;
+    if (row.softWrapsNext) continue;
+    ci += 1;
+    const next = chunks[ci] ?? "";
+    if (row.hardWrapsNext) {
+      out = out.replace(/[ \t\u00a0]+$/u, "") + next.replace(/^[ \t\u00a0]+/u, "");
+    } else {
+      out += "\n" + next;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Unified link scan: web URLs + file paths in one pass.
+//
+// URLs are claimed FIRST so the path passes never match inside a URL span —
+// merged here, on the same text findTerminalPaths scans, rather than relying on
+// two race-prone providers (the old WebLinksAddon + path-provider pair would
+// hand different halves of one `file:///…` span to different handlers). The
+// URL regex already stops before CJK sentence endings and ASCII trailing
+// punctuation; path rules are unchanged.
+
+export interface TerminalLinkMatch extends TerminalPathMatch {
+  kind: "url" | "path";
+}
+
+export function findTerminalLinks(text: string, cwd?: string): TerminalLinkMatch[] {
+  const out: TerminalLinkMatch[] = [];
+  const claimed: Array<[number, number]> = [];
+  WEB_URL_REGEX.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = WEB_URL_REGEX.exec(text)) !== null) {
+    claimed.push([m.index, m.index + m[0].length]);
+    out.push({ kind: "url", path: m[0], index: m.index, length: m[0].length });
+  }
+  for (const hit of findTerminalPaths(text, cwd)) {
+    const start = hit.index;
+    const end = hit.index + hit.length;
+    if (claimed.some(([a, b]) => start < b && end > a)) continue;
+    claimed.push([start, end]);
+    out.push({ kind: "path", ...hit });
+  }
+  out.sort((a, b) => a.index - b.index);
+  return out;
+}

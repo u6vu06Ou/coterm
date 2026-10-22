@@ -259,6 +259,8 @@ const api: AiTerminalApi = {
     ipcRenderer.invoke(IPC.terminalWorkspaceGet, projectId),
   getTerminalTranscript: (terminalId: string) =>
     ipcRenderer.invoke(IPC.terminalTranscriptGet, terminalId),
+  getTerminalSessionInfo: (terminalId: string) =>
+    ipcRenderer.invoke(IPC.terminalSessionInfoGet, terminalId),
   saveTerminalWorkspace: (input: TerminalWorkspaceSaveInput) =>
     ipcRenderer.invoke(IPC.terminalWorkspaceSave, input),
   onEvent: (callback: (event: NormalizedEvent) => void) => {

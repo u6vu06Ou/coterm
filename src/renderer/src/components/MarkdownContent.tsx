@@ -13,7 +13,7 @@ import sql from "highlight.js/lib/languages/sql";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -39,7 +39,11 @@ function codeText(children: ReactNode): string {
   return "";
 }
 
-export function MarkdownContent({
+// Memoized: both props are plain strings, so a parent re-render (the reader
+// polls while open; the elapsed-seconds strip ticks every second) never
+// re-runs ReactMarkdown or hljs for content that did not change — that
+// re-highlight was the visible color flash on every refresh.
+export const MarkdownContent = memo(function MarkdownContent({
   markdown,
   className,
 }: {
@@ -81,4 +85,4 @@ export function MarkdownContent({
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -1,6 +1,7 @@
 import { History, PanelRightClose, RotateCcw, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Checkpoint, CheckpointDiff, CheckpointRestorePreview, NormalizedEvent } from "@shared/types";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import { useI18n, type MessageKey } from "../i18n";
 
@@ -10,7 +11,11 @@ const CHECKPOINT_WIDTH_MIN = 280;
 const CHECKPOINT_WIDTH_MAX = 760;
 
 export function CheckpointRail(): React.JSX.Element | null {
-  const { checkpointOpen, setCheckpointOpen, dockLayout } = useAppStore();
+  const { checkpointOpen, setCheckpointOpen, dockLayout } = useAppStore(useShallow((s) => ({
+    checkpointOpen: s.checkpointOpen,
+    setCheckpointOpen: s.setCheckpointOpen,
+    dockLayout: s.dockLayout,
+  })));
   const { t } = useI18n();
   const selectedTile = dockLayout.tiles.find(
     (tile) => tile.terminalId === dockLayout.selectedTerminalId,

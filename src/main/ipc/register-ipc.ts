@@ -435,6 +435,7 @@ export function registerIpc(dependencies: IpcDependencies): () => Promise<void> 
   handle(IPC.terminalRefresh, (terminalId: unknown) => operations.refreshTerminal(terminalId));
   handle(IPC.terminalWorkspaceGet, (projectId: unknown) => operations.getTerminalWorkspace(projectId));
   handle(IPC.terminalTranscriptGet, (terminalId: unknown) => operations.getTerminalTranscript(terminalId));
+  handle(IPC.terminalSessionInfoGet, (terminalId: unknown) => operations.getTerminalSessionInfo(terminalId));
   handle(IPC.terminalWorkspaceSave, (input: unknown) => operations.saveTerminalWorkspace(input));
   handle(IPC.dockGetLayout, () => operations.getDockLayout());
   handle(IPC.projectDelete, (input: unknown) => operations.deleteProject(input));

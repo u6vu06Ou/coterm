@@ -33,6 +33,7 @@ let settings: AppSettings = {
   telemetry: false,
   searchIndexEnabled: true,
   agentDoneToast: true,
+  restoreSessionOnLaunch: true,
   agentApi: { enabled: true, token: "", rateLimit: { terminalPerMinute: 30, browserPerMinute: 30 } },
   retention: { days: 30, pruneOnStart: false },
   browserApproval: { mode: "ask" },
@@ -667,6 +668,26 @@ function createMockApi(): AiTerminalApi {
     getWorktreeRegistry: () => Promise.resolve({ entries: [], baselineCount: 0, lastCheckedAt: null }),
     refreshTerminal: () => Promise.resolve(),
     getTerminalTranscript: () => Promise.resolve({ messages: [] }),
+    getTerminalSessionInfo: (terminalId) => {
+      const terminal = terminals.find((t) => t.id === terminalId && t.isAgent) ?? null;
+      if (!terminal) return Promise.resolve(null);
+      const provider = terminal.agentProfile?.startsWith("codex") ? ("codex" as const) : ("claude" as const);
+      return Promise.resolve({
+        terminalId,
+        agentProfile: terminal.agentProfile,
+        provider,
+        nativeSessionId: terminal.nativeSessionId,
+        cwd: terminal.cwd,
+        pid: terminal.pid,
+        model: null,
+        transcriptPath: null,
+        resumeCommand: terminal.nativeSessionId
+          ? provider === "codex"
+            ? `codex resume ${terminal.nativeSessionId}`
+            : `claude --resume ${terminal.nativeSessionId}`
+          : null,
+      });
+    },
     getTerminalWorkspace: (requestedProjectId) =>
       Promise.resolve({
         terminals: terminals.filter((terminal) => terminal.projectId === requestedProjectId),

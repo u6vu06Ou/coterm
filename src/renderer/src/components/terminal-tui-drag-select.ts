@@ -1,6 +1,7 @@
 import type { Terminal } from "@xterm/xterm";
 import { xtermTriggerMouseEvent } from "./terminal-touch-scroll";
 import { cleanTerminalCopy } from "@shared/value";
+import { hardWrapAwareSelectionText } from "./terminal-copy";
 
 /**
  * 全螢幕 agent（Claude Code / Codex）會開滑鼠追蹤：xterm 把左鍵拖曳整段轉給
@@ -127,7 +128,7 @@ export function installTuiDragSelect(
     swallow(event);
     if (!dragging) replayClick(event);
     else {
-      const text = cleanTerminalCopy(terminal.getSelection());
+      const text = cleanTerminalCopy(hardWrapAwareSelectionText(terminal));
       if (text) {
         void navigator.clipboard.writeText(text).then(() => onCopied?.(Array.from(text).length), () => undefined);
       }

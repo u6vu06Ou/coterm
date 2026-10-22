@@ -20,7 +20,7 @@ import {
   type ClaudeProfile,
   buildProfileEnv,
 } from "./profiles-config";
-import { getLauncherDir, shimCommand, supportedAgentProfilesFor } from "./agent-shims";
+import { getLauncherDir, shimCommand, supportedAgentProfilesFor, allShimProfilesFor } from "./agent-shims";
 
 /**
  * Agent API/API launch allowlist. Stage 1 takes an ACTIVE profile table
@@ -200,6 +200,85 @@ export function buildAgentLaunchCommand(
     ...envWall,
     `claude ${claudeArgs}`,
   ].filter(Boolean).join("; "));
+}
+
+/**
+ * Session restore (2026-10-23): rebuild the relaunch command for a pane
+ * captured in session-restore.json. Unlike buildAgentLaunchCommand (Agent API/API
+ * allowlist = free proxy profiles only), this covers every profile the
+ * "+agent" picker can launch — paid/official included (claude-official,
+ * codex-official, codex-team, paid custom profiles) — because the pane was
+ * started by the user launching it, not by an API caller.
+ *
+ * Trusted-resume rule (ABCDEF guide §3) is kept: the command is rebuilt from
+ * the {profile, sessionId} metadata pair only — a malformed session id is
+ * dropped (agent relaunches fresh), never interpolated raw. Returns null for
+ * council (no session concept), gemini without its launcher shim, paid custom
+ * profiles without their shim (credentials live in the shim; the renderer
+ * refuses the same way), and truly unknown profile ids — the caller leaves
+ * those panes as plain shells.
+ */
+export function buildSessionResumeCommand(
+  agentProfile: string,
+  cwd: string,
+  sessionId: string | null,
+  profileTable: Record<string, ClaudeProfile> = DEFAULT_PROFILES,
+): string | null {
+  if (agentProfile === "council") return null;
+  // Snapshot corruption guard: claude session ids and codex rollout ids are
+  // UUID-shaped; anything outside this alphabet was never a real session id,
+  // so resume is dropped and the agent launches fresh instead.
+  const safeSession = sessionId && /^[A-Za-z0-9_-]{1,200}$/.test(sessionId) ? sessionId : null;
+  if (supportedAgentProfilesFor(profileTable).includes(agentProfile)) {
+    return buildAgentLaunchCommand(agentProfile, cwd, null, safeSession, profileTable);
+  }
+  const shim = getLauncherDir();
+  if (shim && allShimProfilesFor(profileTable).includes(agentProfile)) {
+    // gemini's resume is index-based, not a stored session id — its shim
+    // ignores -Resume, so only pass an id when the profile maps one.
+    const args = safeSession && agentProfile !== "gemini" ? ["-Resume", `'${ps(safeSession)}'`] : [];
+    return [
+      `Set-Location -LiteralPath '${ps(cwd)}'`,
+      shimCommand(agentProfile, shim, args),
+    ].join("; ");
+  }
+  // No launcher shim: mirror the renderer's interactiveAgent() inline
+  // fallbacks for the built-in official CLIs (used in tests and before the
+  // first bootstrap shim render).
+  const workspace = ps(cwd);
+  if (agentProfile === "claude-official") {
+    return checkedCommand("claude", [
+      `Set-Location -LiteralPath '${workspace}'`,
+      "$env:ANTHROPIC_BASE_URL=$null; $env:ANTHROPIC_AUTH_TOKEN=$null; $env:ANTHROPIC_MODEL=$null; $env:ANTHROPIC_SMALL_FAST_MODEL=$null",
+      "$env:CLAUDE_CODE_WORKFLOWS='1'",
+      "$env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS='1'",
+      "$env:CLAUDE_CODE_DISABLE_AGENT_VIEW='1'",
+      `claude${safeSession ? ` --resume '${safeSession}'` : ""} --dangerously-skip-permissions --teammate-mode in-process`,
+    ].join("; "));
+  }
+  if (agentProfile === "codex-official") {
+    const resume = safeSession ? ` resume '${safeSession}'` : "";
+    return checkedCommand("codex", [
+      `Set-Location -LiteralPath '${workspace}'`,
+      `$env:CODEX_HOME=$null; codex --dangerously-bypass-approvals-and-sandbox${resume}`,
+    ].join("; "));
+  }
+  if (agentProfile.startsWith("codex-")) {
+    const spec = resolveCodexProfileSpec(agentProfile, profileTable);
+    if (spec?.home === "official") {
+      // codex-team & friends: missing <profile>.config.toml must fail loudly
+      // (codex silently runs as plain Codex otherwise — issue #100 follow-up).
+      const profileName = ps(spec.configProfile ?? agentProfile);
+      const resume = safeSession ? ` resume '${safeSession}'` : "";
+      return checkedCommand("codex", [
+        `Set-Location -LiteralPath '${workspace}'`,
+        "$env:CODEX_HOME=$null",
+        `$profileToml = Join-Path $env:USERPROFILE ('.codex/${profileName}.config.toml')`,
+        `if (-not (Test-Path $profileToml)) { Write-Host 'Codex 設定檔 ~/.codex/${profileName}.config.toml 不存在，請確認檔案是否存在。' -ForegroundColor Yellow } else { codex --profile '${profileName}'${resume} }`,
+      ].join("; "));
+    }
+  }
+  return null;
 }
 
 /**

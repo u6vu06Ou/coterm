@@ -181,7 +181,10 @@ export class RunCoordinator {
         });
         await this.repository.setActiveProvider(input.conversationId, input.profileId);
         await this.repository.completeTurn(turnId, "completed");
-        this.runningConversations.delete(input.conversationId);
+        // Keep the in-flight guard held through the final emit: releasing it
+        // before the assistant.final write lets a second sendMessage start an
+        // overlapping turn on this conversation during the emit await window.
+        // The finally below releases the guard on every path.
         const pendingFinal = finalHolder.event;
         await this.emit(
           turnId,
@@ -215,7 +218,7 @@ export class RunCoordinator {
           status: cancelled ? "idle" : "failed",
         });
         await this.repository.completeTurn(turnId, cancelled ? "cancelled" : "failed");
-        this.runningConversations.delete(input.conversationId);
+        // Guard stays held until the finally below (see success path comment).
         try {
           await this.emit(
             turnId,

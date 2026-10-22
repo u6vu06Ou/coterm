@@ -27,6 +27,7 @@ export function mergeAppSettingsPatch(base: AppSettings, patch: AppSettingsPatch
   if (patch.telemetry !== undefined) merged.telemetry = patch.telemetry;
   if (patch.searchIndexEnabled !== undefined) merged.searchIndexEnabled = patch.searchIndexEnabled;
   if (patch.agentDoneToast !== undefined) merged.agentDoneToast = patch.agentDoneToast;
+  if (patch.restoreSessionOnLaunch !== undefined) merged.restoreSessionOnLaunch = patch.restoreSessionOnLaunch;
   if (patch.agentApi !== undefined) {
     merged.agentApi = {
       enabled: patch.agentApi.enabled ?? base.agentApi.enabled,

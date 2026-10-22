@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTerminalPath, findTerminalPaths, lineTextAndColumnMap, linkRangeForMatch, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, WEB_URL_REGEX, type TerminalCellLike, type TerminalLogicalRow } from "../../src/renderer/src/components/terminal-links";
+import { classifyTerminalPath, findTerminalLinks, findTerminalPaths, lineTextAndColumnMap, linkRangeForMatch, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, WEB_URL_REGEX, type TerminalCellLike, type TerminalLogicalRow } from "../../src/renderer/src/components/terminal-links";
 
 const cell = (chars: string, width: number): TerminalCellLike => ({ chars, width });
 // A line of plain single-width characters as buffer cells.
@@ -735,5 +735,57 @@ describe("web URL regex (underline covers the full URL, punctuation/CJK ends it)
   it("index.html alone without a separator has no file-path link either", () => {
     expect(findTerminalPaths("index.html", "D:\\proj")).toEqual([]);
     expect(findTerminalPaths("example.com node.js", "D:\\proj")).toEqual([]);
+  });
+});
+
+describe("findTerminalLinks (unified URL + path scan)", () => {
+  it("detects the hard-wrapped CJK-prefixed path from the user repro", () => {
+    // Ink hard wrap: the rows are NOT isWrapped; TerminalDock's logical-line
+    // walk marks them continues:true once rowHardWrapsInto fires, so the
+    // matcher sees the joined text. Full-width colon ： separates the prefix.
+    const first = "網站新入口：D:\\workspace\\trade\\MY_RESEARCH\\research\\strategy_observatory_20261021\\OBSE";
+    const rows: TerminalLogicalRow[] = [
+      { cells: [...wideCells("網"), ...wideCells("站"), ...wideCells("新"), ...wideCells("入"), ...wideCells("口"), ...wideCells("："), ...narrowCells("D:\\workspace\\trade\\MY_RESEARCH\\research\\strategy_observatory_20261021\\OBSE")], row: 0, continues: true },
+      { cells: narrowCells("RVATORY_20261022.html"), row: 1, continues: false },
+    ];
+    const map = multiRowTextAndColumnMap(rows);
+    expect(map.text).toBe(`${first}RVATORY_20261022.html`);
+    const links = findTerminalLinks(map.text);
+    expect(links).toHaveLength(1);
+    expect(links[0]!.kind).toBe("path");
+    expect(links[0]!.path).toBe("D:\\workspace\\trade\\MY_RESEARCH\\research\\strategy_observatory_20261021\\OBSERVATORY_20261022.html");
+    // The range spans both buffer rows so xterm underlines & click-tests both.
+    const range = multiRowLinkRangeForMatch(map, links[0]!.index, links[0]!.length);
+    expect(range.start.y).toBe(1);
+    expect(range.end.y).toBe(2);
+    expect(range.start.x).toBe(13); // 6 wide chars = 12 columns, path starts col 13 (1-based)
+    expect(range.end.x).toBe("RVATORY_20261022.html".length);
+  });
+
+  it("detects a hard-wrapped URL across rows and kinds it url", () => {
+    const url = "https://example.com/reports/strategy_observatory_20261021/OBSERVATORY_20261022.html";
+    const COLS = 30;
+    const rows: TerminalLogicalRow[] = [];
+    for (let start = 0; start < url.length; start += COLS) {
+      rows.push({ cells: narrowCells(url.slice(start, start + COLS)), row: rows.length, continues: start + COLS < url.length });
+    }
+    const links = findTerminalLinks(multiRowTextAndColumnMap(rows).text);
+    expect(links).toHaveLength(1);
+    expect(links[0]!.kind).toBe("url");
+    expect(links[0]!.path).toBe(url);
+  });
+
+  it("never double-matches a path-looking fragment inside a claimed URL", () => {
+    const links = findTerminalLinks("open https://files.example.com/D:/work/out.html now");
+    expect(links).toHaveLength(1);
+    expect(links[0]!.kind).toBe("url");
+  });
+
+  it("keeps path and url links side by side on one line", () => {
+    const links = findTerminalLinks("wrote D:\\proj\\out.md then https://example.com/x done");
+    expect(links.map((l) => `${l.kind}:${l.path}`)).toEqual([
+      "path:D:\\proj\\out.md",
+      "url:https://example.com/x",
+    ]);
   });
 });

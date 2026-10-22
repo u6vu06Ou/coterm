@@ -369,6 +369,27 @@ export type TerminalTranscript = {
   stale?: boolean;
   reasonCode?: string;
 };
+/**
+ * Metadata for the pane-header "Session 資訊" block (2026-10-23): everything
+ * another agent needs to pick THIS session up — profile, native id, absolute
+ * transcript path (resolved by the shared session-file resolver, so it
+ * follows /clear + /resume hops), and a copy-ready resume command.
+ */
+export interface TerminalSessionInfo {
+  terminalId: string;
+  agentProfile: string | null;
+  provider: TranscriptProvider;
+  /** The id of the session file the agent is writing right now (follows rebinds). */
+  nativeSessionId: string | null;
+  cwd: string;
+  /** OS pid of the PTY process (0 when unknown). */
+  pid: number;
+  model: string | null;
+  /** Absolute native transcript path; null while unresolved/ambiguous. */
+  transcriptPath: string | null;
+  /** Shell command that resumes this session from its cwd; null when unknown. */
+  resumeCommand: string | null;
+}
 export type TerminalWriteInput = z.infer<typeof terminalWriteInputSchema>;
 export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
 export type WorkspaceListInput = z.infer<typeof workspaceListInputSchema>;

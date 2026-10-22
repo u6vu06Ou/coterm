@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { CustomProfileEntry } from "@shared/schema";
 import { useI18n } from "../i18n";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import {
   EMPTY_CUSTOM_MODEL_DRAFT,
@@ -25,7 +26,10 @@ import {
 // and an untouched box preserves the persisted token on save.
 
 export function SettingsCustomModels(): React.JSX.Element | null {
-  const { settings, updateSettings } = useAppStore();
+  const { settings, updateSettings } = useAppStore(useShallow((s) => ({
+    settings: s.settings,
+    updateSettings: s.updateSettings,
+  })));
   const { t } = useI18n();
   const [draft, setDraft] = useState<CustomModelDraft | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);

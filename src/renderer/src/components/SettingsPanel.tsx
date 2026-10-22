@@ -5,6 +5,7 @@ import { toLegacyPtyState } from "@shared/pty-state";
 import { AGENT_RATE_LIMIT_DEFAULTS } from "@shared/schema";
 import { useI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import { MarkdownContent } from "./MarkdownContent";
 import { SettingsCustomModels } from "./SettingsCustomModels";
@@ -123,7 +124,13 @@ function readStoredSettingsTab(): SettingsTabId {
 }
 
 export function SettingsPanel(): React.JSX.Element | null {
-  const { settingsOpen, setSettingsOpen, settings, updateSettings, providers } = useAppStore();
+  const { settingsOpen, setSettingsOpen, settings, updateSettings, providers } = useAppStore(useShallow((s) => ({
+    settingsOpen: s.settingsOpen,
+    setSettingsOpen: s.setSettingsOpen,
+    settings: s.settings,
+    updateSettings: s.updateSettings,
+    providers: s.providers,
+  })));
   const { t } = useI18n();
   const [backupMessage, setBackupMessage] = useState("");
   const [diagnosticsMessage, setDiagnosticsMessage] = useState("");
@@ -169,7 +176,9 @@ export function SettingsPanel(): React.JSX.Element | null {
       void window.aiTerminal.getTerminalDashboard().then(setDashboard).catch(() => undefined);
     };
     fetchDashboard();
-    dashboardTimer.current = setInterval(fetchDashboard, 1500);
+    // Terminal-list events drive the dashboard; the interval is only a slow
+    // drift-correction fallback (main pushes every relevant change already).
+    dashboardTimer.current = setInterval(fetchDashboard, 15_000);
     const offListChanged = window.aiTerminal.onTerminalListChanged(() => fetchDashboard());
     return () => {
       if (dashboardTimer.current) clearInterval(dashboardTimer.current);
@@ -509,6 +518,19 @@ export function SettingsPanel(): React.JSX.Element | null {
                 <ToggleLabels on={settings.agentDoneToast} />
               </button>
               <small>{t("settings.agentDoneToast.help")}</small>
+            </label>
+            <label className="settings-toggle-row">
+              {t("settings.restoreSessionOnLaunch")}
+              <button
+                data-action-id="settings.session-restore.toggle"
+                type="button"
+                className={`settings-toggle ${settings.restoreSessionOnLaunch ? "on" : ""}`}
+                aria-pressed={settings.restoreSessionOnLaunch}
+                onClick={() => patch("restoreSessionOnLaunch", !settings.restoreSessionOnLaunch)}
+              >
+                <ToggleLabels on={settings.restoreSessionOnLaunch} />
+              </button>
+              <small>{t("settings.restoreSessionOnLaunch.help")}</small>
             </label>
             <SettingsCustomModels />
           </section>

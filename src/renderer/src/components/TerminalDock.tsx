@@ -18,7 +18,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Terminal, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -26,7 +25,7 @@ import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { ProgressAddon } from "@xterm/addon-progress";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "@xterm/xterm/css/xterm.css";
-import type { Attachment, DockLayout, DockTile, TerminalInfo, PtyState } from "@shared/types";
+import type { Attachment, DockLayout, DockTile, TerminalInfo, TerminalSessionInfo, PtyState } from "@shared/types";
 import { isInterruptible, isAttentionState, toLegacyPtyState } from "@shared/pty-state";
 import { quoteTerminalPath } from "@shared/terminal";
 import { useAppStore } from "../store/app-store";
@@ -39,7 +38,9 @@ import {
 import { setInteractiveLauncherDir } from "./interactive-agent";
 import { READING_DRAG_MIME } from "./sidebar-sessions";
 import { buildAgentLaunchWriteInput } from "./launch-write";
-import { classifyTerminalPath, findTerminalPaths, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, WEB_URL_REGEX, type TerminalCellLike, type TerminalLogicalRow } from "./terminal-links";
+import { classifyTerminalPath, findTerminalLinks, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, rowHardWrapsInto, type TerminalCellLike, type TerminalLogicalRow } from "./terminal-links";
+import { hardWrapAwareSelectionText } from "./terminal-copy";
+import { installLinkUnderlineOverlay, type LinkMarkSegment } from "./terminal-link-marks";
 import { calculateImeAnchor } from "./terminal-ime-position";
 import {
   captureHorizontalScrollLock,
@@ -888,7 +889,7 @@ function DockTileView({
   ptyCols: number;
   ptyRows: number;
 }): React.JSX.Element {
-  const { saveAttachment } = useAppStore();
+  const saveAttachment = useAppStore((s) => s.saveAttachment);
   if (!entry) {
     return <TerminalPlaceholder />;
   }
@@ -1828,26 +1829,14 @@ function XtermPane({
       return data;
     };
     terminalRef.current = terminal;
+    // Links (paths AND web URLs) are served by ONE provider below, not
+    // WebLinksAddon + a path provider: the addon only joins soft-wrapped
+    // (isWrapped) rows, so Ink-TUI hard wraps underlined truncated fragments,
+    // and the two providers fought over shared file:/// spans (first click hit
+    // one, next click the other — the old C2 file:// reroute bug).
     const fit = new FitAddon();
     fitRef.current = fit;
     terminal.loadAddon(fit);
-    terminal.loadAddon(new WebLinksAddon((_event, uri) => {
-      // C2: file:// URIs the agent emits for paths-with-spaces must route to
-      // the in-app artifact panel, not the OS browser. Without this, WebLinksAddon
-      // and the custom link provider fight over the same `file:///...` span — the
-      // first click may land on the custom provider (opens artifact), the next on
-      // WebLinksAddon (no-op / browser), so only the first html ever opens.
-      if (uri.toLowerCase().startsWith("file:///")) {
-        openTerminalPath(uri, info.projectId);
-        return;
-      }
-      window.open(uri, "_blank", "noopener,noreferrer");
-    }, {
-      // The stock regex swallows trailing CJK sentences (its body class only
-      // excludes ASCII punctuation). WEB_URL_REGEX ends the span at CJK
-      // letters/punctuation so 參考https://x.io/a，好 underlines just the URL.
-      urlRegex: WEB_URL_REGEX,
-    }));
     // F: pre-open addons. UnicodeGraphemesAddon MUST load before open() and
     // have activeVersion set before any write() — otherwise already-rendered
     // lines keep the old width and zh-TW/emoji double-width chars overlap.
@@ -1868,41 +1857,76 @@ function XtermPane({
     terminal.loadAddon(serialize);
     serializeRef.current = serialize;
     terminal.loadAddon(new ProgressAddon());
-    // C2: make absolute file paths in scrollback clickable.
+    // C2: make absolute file paths and web URLs in scrollback clickable.
+    // A long path/URL wider than the pane crosses 2+ buffer rows; soft wraps
+    // carry isWrapped, but agent TUIs (Ink) wrap lines THEMSELVES and print
+    // each fragment as its own row — those continuation rows are NOT isWrapped.
+    // The logical-line walk therefore joins on either signal (rowHardWrapsInto:
+    // content reaches the pane edge, box-drawing edges excluded). Links get
+    // multi-row ILink ranges — xterm renders and click-tests those natively.
+    // Bounded walk: TUI borders/full-width bars could otherwise chain a scan
+    // across the whole visible screen.
+    const LINK_WRAP_WALK_LIMIT = 32;
+    const collectLogicalRows = (anchorRow: number): TerminalLogicalRow[] | null => {
+      const buffer = terminal.buffer.active;
+      if (!buffer.getLine(anchorRow)) return null;
+      const scratch = buffer.getNullCell();
+      const cache = new Map<number, TerminalCellLike[]>();
+      const readCells = (row: number): TerminalCellLike[] | null => {
+        const hit = cache.get(row);
+        if (hit) return hit;
+        const line = buffer.getLine(row);
+        if (!line) return null;
+        const cells: TerminalCellLike[] = [];
+        for (let x = 0; x < line.length; x += 1) {
+          const cell = line.getCell(x, scratch);
+          if (!cell) break;
+          cells.push({ chars: cell.getChars(), width: cell.getWidth() });
+        }
+        cache.set(row, cells);
+        return cells;
+      };
+      let first = anchorRow;
+      let firstCells = readCells(first);
+      if (!firstCells) return null;
+      for (let steps = 0; first > 0 && steps < LINK_WRAP_WALK_LIMIT; steps += 1) {
+        const current = buffer.getLine(first);
+        const aboveCells = readCells(first - 1);
+        if (!current || !aboveCells) break;
+        if (!(current.isWrapped || rowHardWrapsInto(aboveCells, firstCells, terminal.cols))) break;
+        first -= 1;
+        firstCells = aboveCells;
+      }
+      const rows: TerminalLogicalRow[] = [];
+      for (let row = first; row < buffer.length && rows.length <= LINK_WRAP_WALK_LIMIT * 2; row += 1) {
+        const cells = readCells(row);
+        if (!cells) break;
+        const next = buffer.getLine(row + 1);
+        const nextCells = next ? readCells(row + 1) : null;
+        const continues =
+          Boolean(next) &&
+          (next!.isWrapped || rowHardWrapsInto(cells, nextCells ?? undefined, terminal.cols));
+        rows.push({ cells, row, continues });
+        if (!continues) break;
+      }
+      return rows;
+    };
     const linkProvider = terminal.registerLinkProvider({
       provideLinks(y, callback) {
-        // A long path wider than the pane soft-wraps across 2+ buffer rows;
-        // continuation rows have IBufferLine.isWrapped === true. A single-row
-        // read underlines just that row's fragment and activates a truncated
-        // path, so walk to the logical line's first/last row, join the whole
-        // line's cells (dropping the unused cell where a wide wrapped character
-        // did not fit), and return multi-row ILink ranges — xterm renders and
-        // click-tests those natively.
-        const buffer = terminal.buffer.active;
-        if (!buffer.getLine(y - 1)) return callback(undefined);
-        let first = y - 1;
-        while (first > 0 && buffer.getLine(first)?.isWrapped) first -= 1;
-        let last = first;
-        while (last + 1 < buffer.length && buffer.getLine(last + 1)?.isWrapped) last += 1;
-        const scratch = buffer.getNullCell();
-        const rows: TerminalLogicalRow[] = [];
-        for (let row = first; row <= last; row += 1) {
-          const line = buffer.getLine(row);
-          if (!line) break;
-          const cells: TerminalCellLike[] = [];
-          for (let x = 0; x < line.length; x += 1) {
-            const cell = line.getCell(x, scratch);
-            if (!cell) break;
-            cells.push({ chars: cell.getChars(), width: cell.getWidth() });
-          }
-          rows.push({ cells, row, continues: row < last });
-        }
+        const rows = collectLogicalRows(y - 1);
+        if (!rows || rows.length === 0) return callback(undefined);
         const map = multiRowTextAndColumnMap(rows);
-        const matches = findTerminalPaths(map.text, info.cwd);
-        const links: ILink[] = matches.map(({ path, index, length }) => ({
+        const matches = findTerminalLinks(map.text, info.cwd);
+        const links: ILink[] = matches.map(({ kind, path, index, length }) => ({
           text: map.text.slice(index, index + length),
           range: multiRowLinkRangeForMatch(map, index, length),
-          activate: () => openTerminalPath(path, info.projectId),
+          activate: () => {
+            if (kind === "url") {
+              window.open(path, "_blank", "noopener,noreferrer");
+              return;
+            }
+            openTerminalPath(path, info.projectId);
+          },
         }));
         // provideLinks is per-row: only the links that cover THIS row.
         const onRow = links.filter((link) => link.range.start.y <= y && y <= link.range.end.y);
@@ -2021,13 +2045,45 @@ function XtermPane({
         // before PTY send), which the work order explicitly defers.
         selectAll: () => terminal.selectAll(),
         openSearch: () => setSearchOpen(true),
-        getSelection: () => terminal.getSelection(),
+        getSelection: () => hardWrapAwareSelectionText(terminal),
         copyText: (text) => {
           void navigator.clipboard.writeText(text);
         },
       }),
     );
     terminal.open(host);
+    // Persistent link underlines: xterm only underlines links on hover and its
+    // decorations API cannot paint an underline (6.1-beta), so detected links
+    // get a DOM ruler per segment. Scans reuse the provider's logical-line walk;
+    // only visible rows, rAF-throttled on write/scroll/resize.
+    const scanLinkSegments = (): LinkMarkSegment[] => {
+      const buffer = terminal.buffer.active;
+      const topRow = buffer.viewportY;
+      const bottomRow = Math.min(buffer.length, topRow + terminal.rows);
+      const segments: LinkMarkSegment[] = [];
+      for (let row = topRow; row < bottomRow; ) {
+        const rows = collectLogicalRows(row);
+        if (!rows || rows.length === 0) {
+          row += 1;
+          continue;
+        }
+        const map = multiRowTextAndColumnMap(rows);
+        for (const match of findTerminalLinks(map.text, info.cwd)) {
+          const range = multiRowLinkRangeForMatch(map, match.index, match.length);
+          for (let segRow = range.start.y - 1; segRow <= range.end.y - 1; segRow += 1) {
+            if (segRow < topRow || segRow >= bottomRow) continue;
+            const startCol = segRow === range.start.y - 1 ? range.start.x - 1 : 0;
+            const endCol = segRow === range.end.y - 1 ? range.end.x : terminal.cols;
+            if (endCol > startCol) {
+              segments.push({ row: segRow - topRow, startCol, endCol });
+            }
+          }
+        }
+        row = rows[rows.length - 1]!.row + 1;
+      }
+      return segments;
+    };
+    const uninstallLinkUnderlines = installLinkUnderlineOverlay(terminal, host, scanLinkSegments);
     typedLineRef.current = installTypedLineMarker(terminal, resolvedThemeRef.current.typedLine ?? null, echoCapture);
     {
       const typedLine = typedLineRef.current;
@@ -3412,6 +3468,7 @@ function XtermPane({
       offData();
       dataDisposable.dispose();
       linkProvider.dispose();
+      uninstallLinkUnderlines();
       // F: dispose engine-pack addons. terminal.dispose() also disposes loaded
       // addons, but we null the refs so a post-cleanup search() call is a no-op.
       // webglRef may be null if it threw on load or was disposed on context loss.
@@ -3637,6 +3694,14 @@ function XtermPane({
   // doc (saved under <userData>/handoffs/ AND copied to the clipboard); copy-
   // ref writes a short pointer (cwd / tool / transcript path) so an agent in
   // another window can find THIS session's native transcript and resume it.
+  // 2026-10-23: the pointer copy + its "Session 資訊" block now serve EVERY
+  // agent pane with a session id (free proxy profiles too), not just paid
+  // officials; only the handoff export remains paid-only.
+  // "Session 資訊" block data (2026-10-23): profile / live session id / ABSOLUTE
+  // transcript path / pid / resume command, answered by main through the same
+  // session-file resolver the reader uses (follows /clear + in-session /resume
+  // hops). Fetched only while the header menu is open.
+  const [sessionInfo, setSessionInfo] = useState<TerminalSessionInfo | null>(null);
   const [handoffState, setHandoffState] = useState<"idle" | "busy" | "done" | "error">("idle");
   // true = the exporter guessed "newest transcript in the project dir", which
   // may be ANOTHER window's session — disclose that in the done tooltip.
@@ -3657,28 +3722,46 @@ function XtermPane({
   }, [handoffState, info.id]);
   const copySessionRef = useCallback((): void => {
     // Same per-char slug rule as the main-process exporter (POSIX paths keep
-    // their leading dash — e.g. /home/x → -home-x).
+    // their leading dash — e.g. /home/x → -home-x). Only a fallback while the
+    // resolver's absolute path is still in flight.
     const slug = info.cwd.replace(/[^a-zA-Z0-9_-]/g, "-");
-    const tool =
-      info.agentProfile === "claude-official"
-        ? "claude（正版）"
-        : info.agentProfile === "codex-official"
-          ? "codex（正版）"
-          : (info.agentProfile ?? info.profile);
-    const transcript = info.nativeSessionId
-      ? `~/.claude/projects/${slug}/${info.nativeSessionId}.jsonl`
-      : `~/.claude/projects/${slug}/ 裡最新修改的 .jsonl`;
-    const text = [
-      "請接手我在另一個視窗的 session：",
-      `- 資料夾：${info.cwd}`,
-      `- 工具：${tool}`,
-      `- 對話紀錄：${transcript}`,
-      "請讀那份紀錄、搞清進度，繼續把還沒做完的做完。",
-    ].join("\n");
-    void navigator.clipboard.writeText(text).catch(() => undefined);
+    const agentKind =
+      info.agentProfile && info.agentProfile.startsWith("codex")
+        ? "codex"
+        : info.agentProfile
+          ? "claude"
+          : info.isAgent
+            ? "agent"
+            : info.profile;
+    const sessionId = sessionInfo?.nativeSessionId ?? info.nativeSessionId;
+    const transcript = sessionInfo?.transcriptPath
+      ?? (agentKind === "claude" && sessionId
+        ? `~/.claude/projects/${slug}/${sessionId}.jsonl`
+        : agentKind === "codex"
+          ? "~/.codex/sessions/ (latest rollout for this cwd)"
+          : `~/.claude/projects/${slug}/ (newest .jsonl)`);
+    const resume = sessionInfo?.resumeCommand
+      ?? (sessionId
+        ? agentKind === "codex"
+          ? `codex resume ${sessionId}`
+          : `claude --resume ${sessionId}`
+        : null);
+    const lines = [
+      "Coterm session pointer",
+      `agent: ${agentKind}`,
+      `session id: ${sessionId ?? "(not bound yet)"}`,
+      `cwd: ${info.cwd}`,
+      `transcript: ${transcript}`,
+    ];
+    if (resume) lines.push(`resume: ${resume}   (run in cwd)`);
+    lines.push(`terminal id: ${info.id}, pid: ${info.pid > 0 ? info.pid : "?"}`);
+    lines.push(
+      "To summarize: read the transcript JSONL (one JSON event per line; user/assistant messages) and compress it.",
+    );
+    void navigator.clipboard.writeText(lines.join("\n")).catch(() => undefined);
     setRefCopied(true);
     window.setTimeout(() => setRefCopied(false), 2_500);
-  }, [info.cwd, info.agentProfile, info.profile, info.nativeSessionId]);
+  }, [info.cwd, info.agentProfile, info.profile, info.isAgent, info.id, info.pid, info.nativeSessionId, sessionInfo]);
 
   // 1.5.45 warroom band: the tile's top-edge colour strip. Colour comes from
   // the LABEL (stable by group name), not from the agent profile — two panes of
@@ -3716,6 +3799,18 @@ function XtermPane({
     onPointerDown: (event: React.PointerEvent) => event.stopPropagation(),
     onPointerUp: (event: React.PointerEvent) => event.stopPropagation(),
   };
+  useEffect(() => {
+    if (!headerMenuOpen || !info.isAgent) return;
+    let cancelled = false;
+    void window.aiTerminal.getTerminalSessionInfo(info.id)
+      .then((value) => {
+        if (!cancelled && value) setSessionInfo(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [headerMenuOpen, info.id, info.isAgent]);
 
   return (
     <section
@@ -3949,7 +4044,9 @@ function XtermPane({
             <span>{info.cwd}</span>
             <span>{modelLabel}{info.agentHandle ? ` · @${info.agentHandle}` : ""}</span>
           </div>
-          <div className="xterm-header-menu-actions">
+          {/* Icon-only tools sit on ONE horizontal row — their own class,
+              because `.xterm-header-menu-actions` is the labelled-button column. */}
+          <div className="xterm-header-menu-icons">
         {/* F: magnifier trigger for the Ctrl+F search overlay. Same pattern as
             the eye toggle: stopPropagation protects xterm focus, so it activates
             the tile explicitly before opening the overlay. */}
@@ -4074,51 +4171,83 @@ function XtermPane({
               <span>{t("dock.menu.label")}</span>
               {labelColorValue && <i className="xterm-header-menu-swatch" style={{ background: labelColorValue }} />}
             </button>
-            {/* Handoff export + session-pointer copy: paid official windows only. */}
+            {/* Handoff export: paid official windows only. (The session-pointer
+                copy moved into the "Session 資訊" block below — 2026-10-23 — so
+                free proxy profiles get it too.) */}
             {officialRainbow && (
-              <>
-                <button
-                  data-action-id="terminal.handoff.export"
-                  type="button"
-                  className="xterm-handoff"
-                  aria-label={t("dock.handoff.export")}
-                  title={
-                    handoffState === "busy"
-                      ? t("dock.handoff.busy")
-                      : handoffState === "done"
-                        ? handoffApproximate
-                          ? t("dock.handoff.doneApproximate")
-                          : t("dock.handoff.done")
-                        : handoffState === "error"
-                          ? t("dock.handoff.failed")
-                          : t("dock.handoff.export")
-                  }
-                  disabled={handoffState === "busy"}
-                  onClick={() => void exportHandoff()}
-                >
-                  {handoffState === "busy" ? (
-                    <Loader2 size={15} className="is-spinning" />
-                  ) : handoffState === "done" ? (
-                    <Check size={15} />
-                  ) : (
-                    <FileDown size={15} />
-                  )}
-                  <span>{t("dock.menu.handoff")}</span>
-                </button>
-                <button
-                  data-action-id="terminal.session-ref.copy"
-                  type="button"
-                  className="xterm-handoff"
-                  aria-label={t("dock.ref.copy")}
-                  title={refCopied ? t("dock.ref.copied") : t("dock.ref.copy")}
-                  onClick={() => copySessionRef()}
-                >
-                  {refCopied ? <Check size={15} /> : <Link2 size={15} />}
-                  <span>{refCopied ? t("dock.menu.refCopied") : t("dock.menu.ref")}</span>
-                </button>
-              </>
+              <button
+                data-action-id="terminal.handoff.export"
+                type="button"
+                className="xterm-handoff"
+                aria-label={t("dock.handoff.export")}
+                title={
+                  handoffState === "busy"
+                    ? t("dock.handoff.busy")
+                    : handoffState === "done"
+                      ? handoffApproximate
+                        ? t("dock.handoff.doneApproximate")
+                        : t("dock.handoff.done")
+                      : handoffState === "error"
+                        ? t("dock.handoff.failed")
+                        : t("dock.handoff.export")
+                }
+                disabled={handoffState === "busy"}
+                onClick={() => void exportHandoff()}
+              >
+                {handoffState === "busy" ? (
+                  <Loader2 size={15} className="is-spinning" />
+                ) : handoffState === "done" ? (
+                  <Check size={15} />
+                ) : (
+                  <FileDown size={15} />
+                )}
+                <span>{t("dock.menu.handoff")}</span>
+              </button>
             )}
           </div>
+          {/* "Session 資訊" (2026-10-23): selectable pointer values + one
+              "複製給 agent" button that pastes elsewhere as a plain-text block
+              an unrelated agent can act on. Agents only; plain shells have no
+              session, so the block stays hidden there. */}
+          {info.isAgent && info.nativeSessionId && (
+            <div className="xterm-header-menu-session">
+              <div className="xterm-header-menu-session-title">{t("dock.menu.sessionInfo")}</div>
+              <div className="xterm-header-menu-session-row">
+                <span className="xterm-header-menu-session-key">{t("dock.session.agent")}</span>
+                <span className="xterm-header-menu-session-value">{info.agentProfile ?? "agent"}</span>
+              </div>
+              <div className="xterm-header-menu-session-row">
+                <span className="xterm-header-menu-session-key">{t("dock.session.id")}</span>
+                <span className="xterm-header-menu-session-value">{sessionInfo?.nativeSessionId ?? info.nativeSessionId}</span>
+              </div>
+              <div className="xterm-header-menu-session-row">
+                <span className="xterm-header-menu-session-key">{t("dock.session.cwd")}</span>
+                <span className="xterm-header-menu-session-value">{info.cwd}</span>
+              </div>
+              <div className="xterm-header-menu-session-row">
+                <span className="xterm-header-menu-session-key">{t("dock.session.transcript")}</span>
+                <span className="xterm-header-menu-session-value">{sessionInfo?.transcriptPath ?? t("dock.session.transcript.pending")}</span>
+              </div>
+              <div className="xterm-header-menu-session-row">
+                <span className="xterm-header-menu-session-key">{t("dock.session.model")}</span>
+                <span className="xterm-header-menu-session-value">{sessionInfo?.model ?? modelLabel}</span>
+              </div>
+              <div className="xterm-header-menu-session-row">
+                <span className="xterm-header-menu-session-key">{t("dock.session.pid")}</span>
+                <span className="xterm-header-menu-session-value">{info.pid > 0 ? String(info.pid) : "—"}</span>
+              </div>
+              <button
+                data-action-id="terminal.session-info.copy"
+                type="button"
+                aria-label={t("dock.ref.copy")}
+                title={refCopied ? t("dock.ref.copied") : t("dock.ref.copy")}
+                onClick={() => copySessionRef()}
+              >
+                {refCopied ? <Check size={15} /> : <Link2 size={15} />}
+                <span>{refCopied ? t("dock.menu.refCopied") : t("dock.menu.ref")}</span>
+              </button>
+            </div>
+          )}
           <div className="xterm-header-menu-foot">
             <span className="xterm-id-label" title={t("dock.session.title", { id: info.id })}>#{info.id.slice(-6)}</span>
             <span className="xterm-header-menu-model">{modelLabel}</span>

@@ -118,7 +118,7 @@
       "terminal.reader.search.previous",
       "terminal.reader.turn-tick",
       "terminal.search.open",
-      "terminal.session-ref.copy",
+      "terminal.session-info.copy",
       "topbar.mobile.composer.use-native",
       "topbar.mobile.reader.toggle",
       "topbar.voice.toggle"

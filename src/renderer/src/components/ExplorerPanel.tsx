@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkspaceEntry, WorkspaceSearchResult } from "@shared/types";
+import { useShallow } from "zustand/react/shallow";
 import { useAppStore } from "../store/app-store";
 import { useI18n } from "../i18n";
 import { MAX_TREE_DEPTH, isInsideRoot, pathKey, renderableChildren } from "./explorer-tree-paths";
@@ -58,7 +59,15 @@ export function ExplorerPanel({
   selectedPath: string | null;
   onSelectFolder: (path: string) => void;
 }): React.JSX.Element {
-  const { explorerOpen, setExplorerOpen, dockLayout, projects, openArtifact, closeArtifact, explorerRevealRequest } = useAppStore();
+  const { explorerOpen, setExplorerOpen, dockLayout, projects, openArtifact, closeArtifact, explorerRevealRequest } = useAppStore(useShallow((s) => ({
+    explorerOpen: s.explorerOpen,
+    setExplorerOpen: s.setExplorerOpen,
+    dockLayout: s.dockLayout,
+    projects: s.projects,
+    openArtifact: s.openArtifact,
+    closeArtifact: s.closeArtifact,
+    explorerRevealRequest: s.explorerRevealRequest,
+  })));
   const { t } = useI18n();
   const selectedTile = dockLayout.tiles.find((tile) => tile.terminalId === dockLayout.selectedTerminalId);
   const project = projects.find((item) => item.id === selectedTile?.projectId);
