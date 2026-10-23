@@ -7539,6 +7539,8 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
   top: var(--pane-header-h, 24px);
   right: 0;
   display: flex;
+  /* wrap so the alternate-screen scope hint can drop onto its own row */
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 4px 6px;
@@ -7568,6 +7570,16 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
+}
+/* Scope hint for the alternate-screen fallback: only the visible screen is
+   searchable, so say so on its own row instead of squeezing the buttons. */
+.xterm-search-hint {
+  flex: 1 0 100%;
+  order: 10;
+  padding-top: 2px;
+  font-size: 10px;
+  color: var(--dock-attention-border, #f0883e);
+  white-space: normal;
 }
 .xterm-search-btn {
   padding: 2px 10px;
@@ -8147,6 +8159,19 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
 }
 .terminal-reader-search-nomatch {
   color: var(--dock-attention-border, #f0883e);
+}
+/* Reader search paint: every match gets a translucent swatch via the CSS
+   Custom Highlight API (ranges are registered under "coterm-reader-search"
+   from the overlay), and the message holding the ACTIVE hit gets an outline
+   so the current position survives the all-matches paint. */
+::highlight(coterm-reader-search) {
+  background-color: rgba(255, 213, 79, 0.45);
+  color: inherit;
+}
+.terminal-reader-message-search-hit {
+  outline: 2px solid var(--accent, #4f8cff);
+  outline-offset: 1px;
+  border-radius: 6px;
 }
 
 /* Reader phone composer (terminal.reader.mobile.*): sends a command to this

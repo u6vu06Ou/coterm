@@ -289,6 +289,14 @@ const api: AiTerminalApi = {
     ipcRenderer.on(IPC.terminalListChanged, listener);
     return () => ipcRenderer.removeListener(IPC.terminalListChanged, listener);
   },
+  onTerminalGeometryChanged: (callback) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { terminalId: string; projectId: string; cols: number; rows: number },
+    ) => callback(payload);
+    ipcRenderer.on(IPC.terminalGeometryChanged, listener);
+    return () => ipcRenderer.removeListener(IPC.terminalGeometryChanged, listener);
+  },
   onTerminalCommand: (callback) => {
     const listener = (
       _event: Electron.IpcRendererEvent,

@@ -1,6 +1,6 @@
 {
   "name": "coterm",
-  "version": "1.5.73",
+  "version": "1.5.74",
   "description": "Coterm is a Windows-first workspace for coding agents, conversations, and terminal panes.",
   "main": "out/main/index.js",
   "author": "Coterm contributors",

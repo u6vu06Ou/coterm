@@ -8,6 +8,7 @@ import { MYQWEN_CLAUDE_CONTEXT_WINDOW } from "@shared/types";
 import { resolveCodexProfileSpec, type CodexProfileSource } from "@shared/codex-profiles";
 import type { PtyManager } from "./pty-manager";
 import { readCodexSessionMeta } from "./session-file-resolver";
+import { ClaudeLiveSessionTracker, type ProcessEntry } from "./claude-live-session";
 import { logger } from "../core/logger";
 
 /**
@@ -60,6 +61,18 @@ export interface ContextBatteryOptions {
   claudeTierCachePath?: string;
   /** Override poll interval for tests. */
   intervalMs?: number;
+  /**
+   * Live-session following (the /resume-to-older fix): rebind a claude pane to
+   * the session its live process reports in ~/.claude/sessions/<pid>.json.
+   * Production wires PtyManager.setNativeSessionId + the transcript resolver's
+   * binding reset; absent in tests that don't exercise the pid-file path, in
+   * which case following is fully off.
+   */
+  followLiveSession?: (terminalId: string, sessionId: string) => void;
+  /** Override ~/.claude/sessions for the follower (tests). */
+  claudeSessionsDir?: string;
+  /** Test hook: fake process table for the follower. */
+  liveSessionListProcesses?: () => Promise<ProcessEntry[]>;
 }
 
 export interface ContextUsage {
@@ -112,6 +125,8 @@ export class ContextBatteryMonitor {
    * Persisted so a restart does not reset the learning. null = not loaded yet.
    */
   private claudeTierCache: Record<string, number> | null = null;
+  /** Lazily built so the tracker's real process listing never runs in tests. */
+  private liveSessions: ClaudeLiveSessionTracker | null = null;
 
   constructor(private readonly options: ContextBatteryOptions) {
     this.projectsRoot = options.projectsRoot ?? join(homedir(), ".claude", "projects");
@@ -134,12 +149,84 @@ export class ContextBatteryMonitor {
     }
   }
 
+  /**
+   * Rebind claude-family panes whose live process reports a different session
+   * than the one bound at launch — the /resume-to-older case the transcript
+   * resolver's successor walk (files born AFTER the anchor) can never see.
+   * Runs on this existing 10s tick; the tracker caches its one system-wide
+   * process listing (~5s TTL) so N claude panes share a single PowerShell call.
+   * Returns true when any pane was rebound (caller re-snapshots).
+   */
+  private async followLiveSessions(
+    snapshots: ReturnType<PtyManager["dashboardSnapshot"]>,
+  ): Promise<boolean> {
+    const rebind = this.options.followLiveSession;
+    if (!rebind) return false;
+    let rebound = false;
+    for (const snapshot of snapshots) {
+      const info = snapshot.info;
+      if (!isClaudeTitleProfile(info.agentProfile) || info.pid <= 0 || !info.cwd) continue;
+      const reserved = snapshots
+        .filter((other) => other.info.id !== info.id)
+        .map((other) => other.info.nativeSessionId)
+        .filter((id): id is string => Boolean(id));
+      try {
+        const liveTracker = this.liveSessionTracker();
+        const next = await liveTracker.follow({
+          terminalId: info.id,
+          shellPid: info.pid,
+          cwd: info.cwd,
+          startedAt: info.startedAt,
+          nativeSessionId: info.nativeSessionId,
+          reservedSessionIds: reserved,
+        });
+        if (next && next !== info.nativeSessionId) {
+          logger.info("pty", "contextBattery.liveSession.rebind", "Claude pane rebound to its live session (/resume followed).", {
+            terminalId: info.id,
+            from: info.nativeSessionId,
+            to: next,
+          });
+          rebind(info.id, next);
+          rebound = true;
+        }
+      } catch (error) {
+        logger.warn("pty", "contextBattery.liveSession.failed", "Live-session follow failed", {
+          terminalId: info.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return rebound;
+  }
+
+  private liveSessionTracker(): ClaudeLiveSessionTracker {
+    if (!this.liveSessions) {
+      this.liveSessions = new ClaudeLiveSessionTracker({
+        sessionsDir: this.options.claudeSessionsDir,
+        claudeProjectsRoot: this.projectsRoot,
+        listProcesses: this.options.liveSessionListProcesses,
+      });
+    }
+    return this.liveSessions;
+  }
+
   private async tick(): Promise<void> {
     let snapshots: ReturnType<PtyManager["dashboardSnapshot"]>;
     try {
       snapshots = this.options.terminals.dashboardSnapshot();
     } catch {
       return;
+    }
+    if (this.options.followLiveSession) {
+      if (await this.followLiveSessions(snapshots)) {
+        // A pane was rebound mid-tick: re-snapshot so measureOne below reads
+        // the NEW session's transcript/usage in the same pass.
+        try {
+          snapshots = this.options.terminals.dashboardSnapshot();
+        } catch {
+          return;
+        }
+      }
     }
     const customProfiles = this.options.getCustomProfiles?.() ?? null;
     const tracked = snapshots.filter(

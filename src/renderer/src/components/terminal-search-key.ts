@@ -48,6 +48,21 @@ export function resolveSearchInputAction(event: SearchKeyEvent):
 // IME compositions bypass the timer entirely (see TerminalDock handlers).
 export const SEARCH_TYPEAHEAD_DELAY_MS = 120;
 
+// Where a pane-level search (magnifier button / Ctrl+F) should run:
+//  - "buffer": normal scrollback buffer — SearchAddon covers everything.
+//  - "reader": alternate-screen agent pane — the xterm buffer holds only the
+//    visible screen (scrollback is empty), and the full content is the
+//    conversation transcript the reader shows, so search reroutes there.
+//  - "visible-only": alternate screen but no transcript available (plain-shell
+//    fullscreen program like vim/htop, or an agent that has not written one
+//    yet) — SearchAddon on the visible screen plus a scope hint.
+export type PaneSearchTarget = "buffer" | "reader" | "visible-only";
+
+export function planPaneSearchTarget(alternateScreen: boolean, transcriptAvailable: boolean): PaneSearchTarget {
+  if (!alternateScreen) return "buffer";
+  return transcriptAvailable ? "reader" : "visible-only";
+}
+
 export interface SearchOverlayColors {
   matchBackground: string;
   matchBorder: string;

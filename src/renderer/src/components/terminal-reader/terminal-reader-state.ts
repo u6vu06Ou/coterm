@@ -4,9 +4,21 @@ import type { TerminalTranscriptMessage } from "@shared/types";
 // summaries/answers + each user turn). The old 對話/原始輸出 toggle and the
 // 僅結論 switch were removed (v1.5.65) — keepFinalTurnOutputs is applied
 // unconditionally, so there is no view state left besides open + font size.
+// A one-shot request to open the reader's search box with a given query
+// (pane-level Ctrl+F / magnifier on an alternate-screen pane reroutes search
+// here, because the xterm buffer then only holds the visible screen). The
+// overlay consumes it on arrival and clears it, so it never replays on later
+// opens; `nonce` lets the overlay ignore a request it already applied when an
+// edit lands between render and effect.
+export interface ReaderSearchRequest {
+  query: string;
+  nonce: number;
+}
+
 export interface ReaderState {
   open: boolean;
   fontSize: number;
+  searchRequest: ReaderSearchRequest | null;
 }
 
 const DEFAULT_FONT_SIZE = 16;
@@ -92,6 +104,7 @@ class TerminalReaderController {
   private readonly state = new Map<string, ReaderState>();
   private readonly listeners = new Set<() => void>();
   private revision = 0;
+  private searchNonce = 0;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -101,13 +114,22 @@ class TerminalReaderController {
   getSnapshot = (): number => this.revision;
 
   get(terminalId: string): ReaderState {
-    return this.state.get(terminalId) ?? { open: false, fontSize: DEFAULT_FONT_SIZE };
+    return this.state.get(terminalId) ?? { open: false, fontSize: DEFAULT_FONT_SIZE, searchRequest: null };
   }
 
   isOpenFor(terminalId: string): boolean { return this.get(terminalId).open; }
 
   toggle(terminalId: string): void { this.update(terminalId, { open: !this.get(terminalId).open }); }
-  close(terminalId: string): void { this.update(terminalId, { open: false }); }
+  close(terminalId: string): void { this.update(terminalId, { open: false, searchRequest: null }); }
+  // Open the reader with its search box focused, prefilled with `query`
+  // (pane search reroute; empty query just opens the box).
+  openWithSearch(terminalId: string, query: string): void {
+    this.searchNonce += 1;
+    this.update(terminalId, { open: true, searchRequest: { query, nonce: this.searchNonce } });
+  }
+  clearSearchRequest(terminalId: string): void {
+    if (this.get(terminalId).searchRequest) this.update(terminalId, { searchRequest: null });
+  }
   adjustFont(terminalId: string, delta: number): void { this.update(terminalId, { fontSize: clampReaderFontSize(this.get(terminalId).fontSize + delta), open: true }); }
   stepFont(terminalId: string, direction: 1 | -1): void { this.update(terminalId, { fontSize: stepReaderFontSize(this.get(terminalId).fontSize, direction), open: true }); }
   setFont(terminalId: string, size: number): void {

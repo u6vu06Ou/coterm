@@ -22,6 +22,12 @@ interface EventMap {
   // Carries a privacy-safe CommandResult (command already redactEgress'd).
   // Never logged with command text in coterm.log — see osc-parser/pty-manager.
   terminalCommand: [{ terminalId: string; projectId: string; result: CommandResult }];
+  // Fired after an actual ConPTY resize lands (pty-manager's 80ms debounce
+  // completes). Per-terminal geometry truth — the dockLayout ptyCols/ptyRows
+  // broadcast is a single GLOBAL slot, so desktop tiles use this push to
+  // notice when another client (e.g. a phone's rows-only claim) resized the
+  // shared PTY out from under their fitted grid and re-assert. Metadata only.
+  terminalGeometryChanged: [{ terminalId: string; projectId: string; cols: number; rows: number }];
   // Fired on every canonical PtyState transition. Metadata-only: terminalId,
   // projectId, state, previousState, source. Never the prompt/command/message.
   // AttentionCenter subscribes to file need-a-human notifications; the WS

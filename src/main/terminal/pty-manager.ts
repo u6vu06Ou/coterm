@@ -531,6 +531,11 @@ export class PtyManager {
     }
     this.claudeKeepalive.trackTerminal(id, info.agentProfile);
     managed.dataDisposer = ptyProcess.onData((data) => {
+      // ConPTY reports pid 0 at spawn and fills it in once the process
+      // connects; the live-session follower needs the real shell pid.
+      if (managed.info.pid <= 0 && (ptyProcess.pid ?? 0) > 0) {
+        managed.info = { ...managed.info, pid: ptyProcess.pid };
+      }
       // Cold-start stage 3/3 (#50/#51): first CLI output. Emitted once per
       // terminal; the timing is metadata-only (durations + profile/kind).
       if (managed.firstOutputAtMs === null) {
@@ -702,6 +707,16 @@ export class PtyManager {
         terminal.process.resize(cols, rows);
         this.agentDetection.resize(terminalId, cols, rows);
         terminal.info = { ...terminal.info, cols, rows };
+        // Per-terminal geometry truth push: the dockLayout ptyCols/ptyRows
+        // broadcast is a single global slot, so a desktop tile uses THIS to
+        // notice when another client (e.g. a phone's rows-only claim) shrank
+        // the shared ConPTY out from under its fitted grid — and re-assert.
+        this.events.emit("terminalGeometryChanged", {
+          terminalId,
+          projectId: terminal.info.projectId,
+          cols,
+          rows,
+        });
       } catch {
         // The PTY may exit between the status check and the native resize call.
       }

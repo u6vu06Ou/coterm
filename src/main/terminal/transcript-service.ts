@@ -44,6 +44,19 @@ export class TerminalTranscriptService {
     return resolved;
   }
 
+  /**
+   * Drop the resolver's followed binding for a terminal. Required after an
+   * EXTERNAL nativeSessionId rebind (the live-session follower catching an
+   * in-session /resume to an older conversation): the resolver otherwise keeps
+   * anchoring on the file it followed earlier — which the successor walk can
+   * never leave for an older-birth file — and the reader stays on the wrong
+   * session. The onRebind path needs no forget: its binding is set to the
+   * rebound file inside resolve() itself.
+   */
+  forgetBinding(terminalId: string): void {
+    this.resolver.forget(terminalId);
+  }
+
   async get(query: TerminalTranscriptQuery): Promise<TerminalTranscript> {
     const provider = providerFor(query.agentProfile);
     const base = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyTerminalPath, findTerminalLinks, findTerminalPaths, lineTextAndColumnMap, linkRangeForMatch, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, WEB_URL_REGEX, type TerminalCellLike, type TerminalLogicalRow } from "../../src/renderer/src/components/terminal-links";
+import { classifyTerminalPath, defaultActionForTerminalPath, findTerminalLinks, findTerminalPaths, lineTextAndColumnMap, linkRangeForMatch, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, WEB_URL_REGEX, type TerminalCellLike, type TerminalLogicalRow } from "../../src/renderer/src/components/terminal-links";
 
 const cell = (chars: string, width: number): TerminalCellLike => ({ chars, width });
 // A line of plain single-width characters as buffer cells.
@@ -787,5 +787,33 @@ describe("findTerminalLinks (unified URL + path scan)", () => {
       "path:D:\\proj\\out.md",
       "url:https://example.com/x",
     ]);
+  });
+});
+
+describe("defaultActionForTerminalPath (link-open)", () => {
+  it("routes .html to the system browser on a desktop shell", () => {
+    expect(defaultActionForTerminalPath("D:\\reports\\OBSERVATORY_20261022.html", true)).toBe("system-browser");
+  });
+
+  it("routes .htm and uppercase .HTML the same way", () => {
+    expect(defaultActionForTerminalPath("C:/tmp/page.htm", true)).toBe("system-browser");
+    expect(defaultActionForTerminalPath("C:/tmp/PAGE.HTML", true)).toBe("system-browser");
+  });
+
+  it("falls back to the panel for .html when no system browser is available", () => {
+    expect(defaultActionForTerminalPath("D:\\reports\\out.html", false)).toBe("panel");
+  });
+
+  it("keeps previewable files in the panel", () => {
+    expect(defaultActionForTerminalPath("D:\\proj\\notes.md", true)).toBe("panel");
+    expect(defaultActionForTerminalPath("D:\\proj\\script.py", true)).toBe("panel");
+  });
+
+  it("opens non-previewable files externally", () => {
+    expect(defaultActionForTerminalPath("D:\\tools\\setup.exe", true)).toBe("external");
+  });
+
+  it("opens an extension-less directory path externally", () => {
+    expect(defaultActionForTerminalPath("D:\\a\\b", true)).toBe("external");
   });
 });

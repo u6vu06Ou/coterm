@@ -5,7 +5,7 @@ import { useI18n } from "../../i18n";
 import { isSearchOpenShortcut, resolveSearchInputAction } from "../terminal-search-key";
 import { ptySignalTone } from "../pty-state-label";
 import { MOBILE_LAYOUT_QUERY } from "../terminal-responsive";
-import { buildSearchCorpus, clampActiveHit, collectMatchOffsets, messageIndexForOffset, nextActiveHit, READER_SEARCH_MAX_HITS } from "./terminal-reader-search";
+import { buildSearchCorpus, clampActiveHit, collectMatchOffsets, collectNodeMatchRanges, messageIndexForOffset, nextActiveHit, READER_SEARCH_MAX_HITS } from "./terminal-reader-search";
 import { activeTurnTick, layoutTurnTicks, ticksEqual, TURN_RAIL_MIN_GAP, TURN_RAIL_MIN_HIT_PX } from "./terminal-reader-turns";
 import type { TurnTick, TurnTickInput } from "./terminal-reader-turns";
 import { ConversationReader } from "./ConversationReader";
@@ -242,6 +242,12 @@ export function TerminalReaderOverlay({
     const offset = hitOffsets[index];
     if (offset === undefined) return;
     const messageIndex = messageIndexForOffset(corpus.starts, offset);
+    // Navigating to a hit is an explicit scroll-away: drop stick-to-bottom, or
+    // the next live-poll refresh would yank the view back to the tail. The ref
+    // flips immediately; the state write is queued so the follow effect (which
+    // calls this synchronously) never setStates mid-effect.
+    stickToBottomRef.current = false;
+    queueMicrotask(() => setNearBottom(false));
     window.setTimeout(() => {
       searchOverlayRef.current?.querySelector(`[data-message-index="${messageIndex}"]`)?.scrollIntoView({ block: "center" });
     }, 0);
@@ -254,6 +260,32 @@ export function TerminalReaderOverlay({
       searchInputRef.current?.select();
     }, 0);
   }, []);
+
+  // Pane-level search reroute: an alternate-screen pane's magnifier / Ctrl+F
+  // lands here as a one-shot searchRequest (the xterm buffer there only holds
+  // the visible screen; the transcript is the searchable content). Consume it
+  // once — open the box, prefill the query — then clear it so reopening the
+  // reader later starts clean.
+  const searchRequest = reader.searchRequest;
+  const consumedSearchNonceRef = useRef(0);
+  useEffect(() => {
+    if (!reader.open || !active || !searchRequest) return;
+    if (searchRequest.nonce === consumedSearchNonceRef.current) return;
+    consumedSearchNonceRef.current = searchRequest.nonce;
+    const query = searchRequest.query;
+    terminalReaderController.clearSearchRequest(terminalId);
+    // Queued — a synchronous setState in an effect body trips the
+    // cascading-render lint (this file resets via queueMicrotask elsewhere).
+    queueMicrotask(() => {
+      setSearchOpen(true);
+      setSearchQuery(query);
+      setActiveHit(0);
+    });
+    window.setTimeout(() => {
+      searchInputRef.current?.focus();
+      if (query) searchInputRef.current?.select();
+    }, 0);
+  }, [active, reader.open, searchRequest, terminalId]);
 
   const closeSearch = useCallback((): void => {
     setSearchOpen(false);
@@ -291,6 +323,52 @@ export function TerminalReaderOverlay({
     if (!searchOpen || !searchQuery || hitOffsets.length === 0) return;
     scrollHitIntoView(clampActiveHit(activeHit, hitOffsets.length));
   }, [activeHit, hitOffsets, scrollHitIntoView, searchOpen, searchQuery]);
+
+  // Message containing the active hit — gets a row outline so the current
+  // position survives the all-matches paint below.
+  const activeHitMessageIndex = searchOpen && searchQuery && hitOffsets.length > 0
+    ? messageIndexForOffset(corpus.starts, hitOffsets[clampActiveHit(activeHit, hitOffsets.length)] ?? 0)
+    : null;
+
+  // Paint every match inside the rendered conversation with the CSS Custom
+  // Highlight API (Chromium ≥105; Electron 42 qualifies). Ranges are rebuilt
+  // from the live DOM text nodes on every content change, so markdown re-shapes
+  // and live-poll appends never leave stale paint behind. Cleared on close.
+  useEffect(() => {
+    const registry = typeof CSS !== "undefined" && "highlights" in CSS ? CSS.highlights : null;
+    if (!registry) return;
+    const clear = (): void => { registry.delete("coterm-reader-search"); };
+    if (!searchOpen || !searchQuery || !reader.open || !active) {
+      clear();
+      return;
+    }
+    const scroller = searchOverlayRef.current?.querySelector(".terminal-reader-scroll");
+    if (!scroller) {
+      clear();
+      return;
+    }
+    const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    let node = walker.nextNode();
+    while (node) {
+      nodes.push(node as Text);
+      node = walker.nextNode();
+    }
+    const matches = collectNodeMatchRanges(nodes.map((text) => text.data), searchQuery);
+    if (matches.length === 0) {
+      clear();
+      return;
+    }
+    const ranges = matches.map((match) => {
+      const range = new Range();
+      const target = nodes[match.node]!;
+      range.setStart(target, match.start);
+      range.setEnd(target, match.end);
+      return range;
+    });
+    registry.set("coterm-reader-search", new Highlight(...ranges));
+    return clear;
+  }, [active, reader.fontSize, reader.open, searchOpen, searchQuery, shownMessages, status]);
 
   // Reset the stick-to-bottom state on open / terminal change: a fresh
   // scroller mounts at the top and fires no scroll event, and "first open"
@@ -620,7 +698,7 @@ export function TerminalReaderOverlay({
       )}
       <div className="terminal-reader-scroll">
         {status === "ready" ? (
-          <ConversationReader messages={shownMessages ?? []} emptyLabel={t("dock.cleanView.empty")} highlightLastAssistant={doneFlash} />
+          <ConversationReader messages={shownMessages ?? []} emptyLabel={t("dock.cleanView.empty")} highlightLastAssistant={doneFlash} searchHitMessageIndex={activeHitMessageIndex} />
         ) : (
           <div className="terminal-reader-status-block">
             <p className="terminal-reader-status" role="status">{statusText ?? "Reader 狀態未知。"}</p>

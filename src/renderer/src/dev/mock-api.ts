@@ -703,6 +703,7 @@ function createMockApi(): AiTerminalApi {
     onTerminalData: (callback) => subscribe(terminalDataListeners, callback),
     onTerminalExit: (callback) => subscribe(terminalExitListeners, callback),
     onTerminalListChanged: (callback) => subscribe(terminalListChangedListeners, callback),
+    onTerminalGeometryChanged: () => () => undefined,
     onTerminalCommand: () => () => undefined,
     onPtyStateChanged: () => () => undefined,
     onAttentionChanged: () => () => undefined,

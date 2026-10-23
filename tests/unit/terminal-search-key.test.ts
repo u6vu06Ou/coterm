@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSearchOpenShortcut,
+  planPaneSearchTarget,
   resolveSearchInputAction,
   SEARCH_TYPEAHEAD_DELAY_MS,
   searchOverlayColors,
@@ -77,6 +78,27 @@ describe("resolveSearchInputAction (overlay keys)", () => {
     expect(
       resolveSearchInputAction(key({ type: "keyup", key: "Enter" })),
     ).toBeNull();
+  });
+});
+
+describe("planPaneSearchTarget (pane search routing)", () => {
+  it("normal buffer always searches the full scrollback", () => {
+    expect(planPaneSearchTarget(false, false)).toBe("buffer");
+    expect(planPaneSearchTarget(false, true)).toBe("buffer");
+  });
+
+  it("alternate screen with a transcript routes search to the reader", () => {
+    // The xterm buffer there only holds the visible screen (scrollback is
+    // empty), so the pane's full searchable content is the transcript the
+    // conversation reader shows.
+    expect(planPaneSearchTarget(true, true)).toBe("reader");
+  });
+
+  it("alternate screen without a transcript falls back to visible-screen search", () => {
+    // Plain-shell fullscreen programs (vim/htop) and agents before their first
+    // session write have no transcript — SearchAddon on the visible screen plus
+    // a scope hint is the useful answer.
+    expect(planPaneSearchTarget(true, false)).toBe("visible-only");
   });
 });
 

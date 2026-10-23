@@ -111,7 +111,10 @@ async function handleRequest(
   agentRateBuckets: AgentRateBuckets,
 ): Promise<void> {
   try {
-    setSecurityHeaders(response);
+    const isArtifactPreview =
+      request.method === "GET" && (request.url ?? "").startsWith("/artifact-preview/");
+    if (isArtifactPreview) setArtifactPreviewHeaders(response);
+    else setSecurityHeaders(response);
     if (request.method === "GET" && request.url === "/health") {
       return json(response, 200, { status: "ok" });
     }
@@ -357,6 +360,22 @@ export async function readBody(request: IncomingMessage): Promise<string | null>
     else chunks.push(bytes);
   }
   return tooLarge ? null : Buffer.concat(chunks).toString("utf8");
+}
+
+// Artifact previews are user/agent-generated HTML whose whole point is running
+// its own scripts (inline + CDN) and iframing inside the artifact panel — the
+// app CSP/XFO would blank them (2026-10-23 report: 預覽只顯示頂部). The route
+// stays loopback+short-lived-token gated; the in-app iframe carries its own
+// sandbox attribute. The CSP `sandbox` directive below gives the page an
+// opaque origin even when opened top-level, so its scripts run but cannot
+// reach same-origin endpoints (web UI, agent API) with the viewer's cookies.
+function setArtifactPreviewHeaders(response: ServerResponse): void {
+  response.setHeader(
+    "Content-Security-Policy",
+    "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads",
+  );
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Content-Type-Options", "nosniff");
 }
 
 function setSecurityHeaders(response: ServerResponse): void {

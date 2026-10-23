@@ -42,6 +42,28 @@ function sessionIdOf(file: string): string {
   return basename(file, ".jsonl");
 }
 
+// Same alphabet buildSessionResumeCommand accepts; anything else was never a
+// real session id and must not round-trip into a launch command.
+const CLAUDE_SESSION_ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
+const CODEX_ROLLOUT_ID_RE = /-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$/;
+
+/**
+ * Extract the native session id from a resolved transcript file: claude names
+ * the file `<id>.jsonl`; codex rollouts end with `-<uuid>.jsonl`. null when the
+ * filename doesn't carry a trustworthy id (caller keeps its own binding then).
+ */
+export function sessionIdFromFile(file: string, provider: SessionProvider): string | null {
+  const name = basename(file);
+  if (provider === "claude") {
+    const id = name.endsWith(".jsonl") ? name.slice(0, -".jsonl".length) : name;
+    return CLAUDE_SESSION_ID_RE.test(id) ? id : null;
+  }
+  if (provider === "codex") {
+    return CODEX_ROLLOUT_ID_RE.exec(name)?.[1] ?? null;
+  }
+  return null;
+}
+
 export function mungeClaudeCwd(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }

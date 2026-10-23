@@ -31,6 +31,8 @@ import { safeErrorMessage } from "./security/redaction";
 import { initLogger, logger, writeCrashLog } from "./core/logger";
 import { AppOperations } from "./core/app-operations";
 import { SessionRestoreService } from "./core/session-restore";
+import { TerminalTranscriptService, providerFor } from "./terminal/transcript-service";
+import { sessionIdFromFile } from "./terminal/session-file-resolver";
 import { ConversationSummarizer } from "./core/conversation-summarizer";
 import { TerminalHandoffService } from "./core/terminal-handoff-service";
 import { AgentApiOrchestrator } from "./core/agentapi-orchestrator";
@@ -446,6 +448,10 @@ async function bootstrap(): Promise<void> {
   // the ACTIVE profile table (same predicate the shim writer uses), so a
   // profile hot-registered after launch is metered from its own CODEX_HOME at
   // the next poll instead of falling back to ~/.codex and losing its title.
+  // appOperationsRef lets the live-session follower reach the transcript
+  // resolver (owned by AppOperations, constructed below); the callback only
+  // fires from the 10s tick, long after startup finished.
+  let appOperationsRef: AppOperations | null = null;
   contextBattery = new ContextBatteryMonitor({
     terminals,
     codexProfileHomes: () => codexProfileHomesFor(
@@ -454,6 +460,16 @@ async function bootstrap(): Promise<void> {
     ),
     getCustomProfiles: () => repository.getSettings().customProfiles,
     claudeTierCachePath: join(app.getPath("userData"), "claude-context-tiers.json"),
+    // /resume to an OLDER conversation inside Claude Code never appears as a
+    // "successor" file, so the transcript resolver's walk misses it. The
+    // follower's pid-file ground truth catches it; rebind through the same
+    // setter the onRebind path uses (resets the header summary + recap) and
+    // drop the resolver's stale followed binding so the reader/session-info
+    // move too.
+    followLiveSession: (terminalId, sessionId) => {
+      terminals?.setNativeSessionId(terminalId, sessionId);
+      appOperationsRef?.forgetTerminalSessionBinding(terminalId);
+    },
   });
   // Browser runtime is lazy: Chromium is not launched until an agent or user
   // creates a session. Renderer only sees typed IPC methods, never Playwright
@@ -562,6 +578,7 @@ async function bootstrap(): Promise<void> {
       });
     });
   }
+  const transcriptService = new TerminalTranscriptService();
   const operations = new AppOperations({
     repository,
     summarizer,
@@ -571,6 +588,7 @@ async function bootstrap(): Promise<void> {
     council,
     approvals,
     terminals,
+    transcriptService,
     attention: attentionCenter,
     usage: usageMonitor,
     activity: activityMonitor,
@@ -587,7 +605,18 @@ async function bootstrap(): Promise<void> {
     checkpointer,
     browser: browserRuntime,
     codexTeamTemplateDir,
+    // Geometry arbitration (shared/pty-geometry.ts): while the desktop window
+    // is visible+focused its tiles own the PTY grid; remote rows-claims are
+    // ignored so a phone can't blank the bottom of a desktop pane.
+    isDesktopWindowActive: () => {
+      try {
+        return !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused();
+      } catch {
+        return false;
+      }
+    },
   });
+  appOperationsRef = operations;
   // Session restore (2026-10-23): snapshot the dock (panes + layout + selection
   // + per-pane agent session id) on every layout change / once a minute / at
   // clean quit, and rebuild it now — before any client connects — so the app
@@ -601,6 +630,40 @@ async function bootstrap(): Promise<void> {
     events,
     getEnabled: () => repository.getSettings().restoreSessionOnLaunch,
     getProfileTable: () => buildActiveProfiles(repository.getSettings().customProfiles),
+    // Snapshot the session the pane is REALLY in: follow /resume-/clear-hops
+    // through the same resolver the reader uses (stored --session-id lags
+    // behind otherwise — 2026-10-23 restore-into-empty-session bug) and rebind
+    // the terminal when it moved, exactly like getTerminalSessionInfo.
+    resolvePaneSession: async (query) => {
+      const ptys = terminals;
+      if (!ptys) return null;
+      try {
+        const reservedSessionIds = ptys.dashboardSnapshot()
+          .map(({ info }) => info.id !== query.terminalId ? info.nativeSessionId : null)
+          .filter((sessionId): sessionId is string => Boolean(sessionId));
+        const resolved = await transcriptService.resolveSessionFile({
+          terminalId: query.terminalId,
+          cwd: query.cwd,
+          startedAt: query.startedAt,
+          nativeSessionId: query.nativeSessionId,
+          agentProfile: query.agentProfile,
+          reservedSessionIds,
+          onRebind: (sessionId) => ptys.setNativeSessionId(query.terminalId, sessionId),
+        });
+        if (resolved.status !== "ready" || !resolved.file) {
+          return { nativeSessionId: query.nativeSessionId, transcriptExists: false };
+        }
+        // Only adopt ids anchored on a native-id binding (never hop on the
+        // cwd/start-time fallback — that file may belong to a claude the user
+        // runs OUTSIDE Coterm in the same directory).
+        const nativeSessionId = resolved.reboundSessionId
+          ?? query.nativeSessionId
+          ?? (resolved.binding === "native-id" ? sessionIdFromFile(resolved.file, providerFor(query.agentProfile)) : null);
+        return { nativeSessionId, transcriptExists: true };
+      } catch {
+        return null;
+      }
+    },
   });
   try {
     const outcome = await sessionRestore.restore();

@@ -544,6 +544,7 @@ export function registerIpc(dependencies: IpcDependencies): () => Promise<void> 
     send(IPC.terminalExit, payload);
   };
   const terminalListChangedListener = (payload: unknown) => send(IPC.terminalListChanged, payload);
+  const terminalGeometryChangedListener = (payload: unknown) => send(IPC.terminalGeometryChanged, payload);
   const terminalCommandListener = (payload: unknown) => {
     const data = payload as { terminalId?: string; projectId?: string; result?: { command?: string; exitCode?: number | null; durationMs?: number } };
     if (data.terminalId && data.projectId && data.result) {
@@ -579,6 +580,7 @@ export function registerIpc(dependencies: IpcDependencies): () => Promise<void> 
   events.on("terminalData", terminalDataListener);
   events.on("terminalExit", terminalExitListener);
   events.on("terminalListChanged", terminalListChangedListener);
+  events.on("terminalGeometryChanged", terminalGeometryChangedListener);
   events.on("terminalCommand", terminalCommandListener);
   events.on("ptyStateChanged", ptyStateChangedListener);
   events.on("profilesChanged", profilesChangedListener);
@@ -599,6 +601,7 @@ export function registerIpc(dependencies: IpcDependencies): () => Promise<void> 
     events.off("terminalData", terminalDataListener);
     events.off("terminalExit", terminalExitListener);
     events.off("terminalListChanged", terminalListChangedListener);
+    events.off("terminalGeometryChanged", terminalGeometryChangedListener);
     events.off("terminalCommand", terminalCommandListener);
     events.off("ptyStateChanged", ptyStateChangedListener);
     events.off("profilesChanged", profilesChangedListener);

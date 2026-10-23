@@ -39,6 +39,36 @@ describe("terminal reader state", () => {
     terminalReaderController.close("a");
     expect(terminalReaderController.get("a").open).toBe(false);
   });
+
+  it("openWithSearch opens the reader with a one-shot search request", () => {
+    terminalReaderController.resetForTest();
+    expect(terminalReaderController.get("a").searchRequest).toBeNull();
+    terminalReaderController.openWithSearch("a", "needle");
+    const state = terminalReaderController.get("a");
+    expect(state.open).toBe(true);
+    expect(state.searchRequest).toMatchObject({ query: "needle" });
+  });
+
+  it("search requests are consumed once and close clears a pending one", () => {
+    terminalReaderController.resetForTest();
+    terminalReaderController.openWithSearch("a", "one");
+    const first = terminalReaderController.get("a").searchRequest;
+    terminalReaderController.openWithSearch("a", "two");
+    const second = terminalReaderController.get("a").searchRequest;
+    // A newer request supersedes the old (ascending nonce), so a stale
+    // request reference can never reopen an old query.
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(second!.nonce).toBeGreaterThan(first!.nonce);
+    expect(second!.query).toBe("two");
+    terminalReaderController.clearSearchRequest("a");
+    expect(terminalReaderController.get("a").searchRequest).toBeNull();
+    expect(terminalReaderController.get("a").open).toBe(true);
+    terminalReaderController.openWithSearch("a", "three");
+    terminalReaderController.close("a");
+    expect(terminalReaderController.get("a").open).toBe(false);
+    expect(terminalReaderController.get("a").searchRequest).toBeNull();
+  });
 });
 
 describe("keepFinalTurnOutputs", () => {

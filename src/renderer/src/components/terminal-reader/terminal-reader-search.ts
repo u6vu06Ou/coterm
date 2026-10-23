@@ -83,3 +83,37 @@ export function clampActiveHit(active: number, total: number): number {
   if (total <= 0) return 0;
   return Math.min(active, total - 1);
 }
+
+// One match inside one text node (offsets are code-unit positions within that
+// node's data). The overlay feeds the rendered text nodes under the reader
+// scroller so matches can be painted with the CSS Custom Highlight API —
+// needed because the corpus offsets above describe message source text, which
+// the markdown renderer reshapes (so corpus offsets cannot be reused as DOM
+// ranges; a hit that straddles two text nodes, e.g. across an <em> boundary,
+// is intentionally not highlighted).
+export interface SearchNodeRange {
+  node: number;
+  start: number;
+  end: number;
+}
+
+export function collectNodeMatchRanges(
+  nodeTexts: readonly string[],
+  query: string,
+  max: number = READER_SEARCH_MAX_HITS,
+): SearchNodeRange[] {
+  if (!query) return [];
+  const needle = query.toLowerCase();
+  const out: SearchNodeRange[] = [];
+  for (let node = 0; node < nodeTexts.length && out.length < max; node++) {
+    const haystack = (nodeTexts[node] ?? "").toLowerCase();
+    let from = 0;
+    while (out.length < max && from + needle.length <= haystack.length) {
+      const idx = haystack.indexOf(needle, from);
+      if (idx === -1) break;
+      out.push({ node, start: idx, end: idx + needle.length });
+      from = idx + needle.length;
+    }
+  }
+  return out;
+}

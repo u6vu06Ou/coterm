@@ -3,6 +3,7 @@ import {
   buildSearchCorpus,
   clampActiveHit,
   collectMatchOffsets,
+  collectNodeMatchRanges,
   messageIndexForOffset,
   nextActiveHit,
   READER_SEARCH_MAX_HITS,
@@ -95,6 +96,42 @@ describe("nextActiveHit", () => {
   it("returns 0 when there are no hits", () => {
     expect(nextActiveHit(5, 0, "next")).toBe(0);
     expect(nextActiveHit(5, 0, "previous")).toBe(0);
+  });
+});
+
+describe("collectNodeMatchRanges (DOM-text highlight offsets)", () => {
+  it("returns no ranges for an empty query", () => {
+    expect(collectNodeMatchRanges(["hello"], "")).toEqual([]);
+  });
+
+  it("matches per node, case-insensitive, with node-relative offsets", () => {
+    const ranges = collectNodeMatchRanges(["Error here", "no hit", "another error"], "error");
+    expect(ranges).toEqual([
+      { node: 0, start: 0, end: 5 },
+      { node: 2, start: 8, end: 13 },
+    ]);
+  });
+
+  it("finds several matches inside one node, non-overlapping", () => {
+    expect(collectNodeMatchRanges(["aaaa"], "aa")).toEqual([
+      { node: 0, start: 0, end: 2 },
+      { node: 0, start: 2, end: 4 },
+    ]);
+  });
+
+  it("matches CJK text by code units", () => {
+    expect(collectNodeMatchRanges(["你好世界，你好嗎"], "你好")).toEqual([
+      { node: 0, start: 0, end: 2 },
+      { node: 0, start: 5, end: 7 },
+    ]);
+  });
+
+  it("never invents cross-node matches (em-boundary splits stay unhighlighted)", () => {
+    expect(collectNodeMatchRanges(["hel", "lo"], "hello")).toEqual([]);
+  });
+
+  it("honours the max cap", () => {
+    expect(collectNodeMatchRanges(["xxxx"], "x", 2).length).toBe(2);
   });
 });
 

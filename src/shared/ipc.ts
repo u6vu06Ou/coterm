@@ -284,6 +284,9 @@ export const IPC = {
   terminalData: "terminal:data",
   terminalExit: "terminal:exit",
   terminalListChanged: "terminal:list-changed",
+  // Per-terminal ConPTY geometry push (desktop re-assertion signal, see
+  // shared/pty-geometry.ts). Desktop-only consumer; not forwarded over WS.
+  terminalGeometryChanged: "terminal:geometry-changed",
   terminalCommandFinished: "terminal:command-finished",
   // --- Agent Attention Center ----------------------------------------------
   // ptyStateChanged: generic, carries ALL canonical state transitions (push).
@@ -523,6 +526,10 @@ export interface AiTerminalApi {
   }) => void): () => void;
   onTerminalExit(callback: (payload: { terminalId: string; exitCode: number }) => void): () => void;
   onTerminalListChanged(callback: (payload: { projectId: string; projectIds?: string[] }) => void): () => void;
+  /** Per-terminal ConPTY geometry push after an applied resize. Desktop
+   *  panes use it to re-assert their fitted grid when another client resized
+   *  the shared PTY meanwhile. Desktop-only (absent on the web client). */
+  onTerminalGeometryChanged(callback: (payload: { terminalId: string; projectId: string; cols: number; rows: number }) => void): () => void;
   onTerminalCommand(callback: (payload: { terminalId: string; projectId: string; result: CommandResult }) => void): () => void;
   // --- Agent Attention Center ----------------------------------------------
   // listAttention: unresolved + recently-resolved inbox (metadata only).

@@ -38,7 +38,7 @@ import {
 import { setInteractiveLauncherDir } from "./interactive-agent";
 import { READING_DRAG_MIME } from "./sidebar-sessions";
 import { buildAgentLaunchWriteInput } from "./launch-write";
-import { classifyTerminalPath, findTerminalLinks, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, rowHardWrapsInto, type TerminalCellLike, type TerminalLogicalRow } from "./terminal-links";
+import { defaultActionForTerminalPath, findTerminalLinks, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, rowHardWrapsInto, type TerminalCellLike, type TerminalLogicalRow } from "./terminal-links";
 import { hardWrapAwareSelectionText } from "./terminal-copy";
 import { installLinkUnderlineOverlay, type LinkMarkSegment } from "./terminal-link-marks";
 import { calculateImeAnchor } from "./terminal-ime-position";
@@ -64,6 +64,7 @@ import { findTuiInputCaret, installTypedLineMarker, type TypedLineMarker } from 
 import { calculateRemoteRows } from "./terminal-remote-rows";
 import { nextRemoteFitCorrectionFontSize, nextRemoteFitFontSize } from "./terminal-remote-fit";
 import { fitTerminalToHost, readTerminalCellMetrics } from "./terminal-fit";
+import { shouldSendTerminalResize, type PtyGridGeometry } from "@shared/pty-geometry";
 import { tileHydrationKey } from "./terminal-dock-hydration-key";
 import { createComposingGate, createRecoveryScheduler, planRecovery } from "./terminal-recovery";
 import { useVoiceDraftSnapshot } from "./voice/voice-draft-state";
@@ -81,6 +82,7 @@ import {
 } from "./terminal-selection-edit";
 import { createTerminalStreamBatcher } from "./terminal-stream-batcher";
 import {
+  planPaneSearchTarget,
   resolveSearchInputAction,
   SEARCH_TYPEAHEAD_DELAY_MS,
   searchOverlayColors,
@@ -130,30 +132,29 @@ function openTerminalPath(rawPath: string, projectId: string): void {
   // Reveal-in-explorer: regardless of how the file opens, ask the sidebar tree
   // to expand to it (no-op when the path lies outside the project workspace).
   store.requestExplorerReveal(path, projectId);
-  // Web pages render properly only in a real browser: with the popout setting
-  // on, .html opens in the agent's popped-out window (desktop only — the web
-  // client has no such IPC). Anything else, or a failure, keeps the panel.
   const api = window.aiTerminal;
-  if (/\.html?$/i.test(path) && store.settings?.agentBrowserWindow === "popout" && !api.isBrowser && typeof api.openInAgentBrowser === "function") {
-    // The IPC reports failure as { ok: false } rather than rejecting — both must fall back to the panel.
-    const fallback = (): void => store.openArtifact(path, path.split(/[\\/]/).pop() ?? path, projectId);
-    void api.openInAgentBrowser(path).then((result) => { if (!result?.ok) fallback(); }, fallback);
-    return;
-  }
-  if (classifyTerminalPath(path) === "artifact") {
+  // Web pages render properly only in a real browser, so .html/.htm goes to the
+  // system browser (main process `shell.openPath`) — desktop only, since the web
+  // client has no such IPC and falls back to the panel. Everything else keeps
+  // its panel/external split.
+  const canOpenSystemBrowser = !api.isBrowser && typeof api.openArtifactExternal === "function";
+  const action = defaultActionForTerminalPath(path, canOpenSystemBrowser);
+  if (action === "panel") {
     const title = path.split(/[\\/]/).pop() ?? path;
     store.openArtifact(path, title, projectId);
-  } else {
-    void window.aiTerminal.openArtifactExternal({ projectId, path }).catch((reason: unknown) => {
-      // Fall back to the raw message for anything that is not a missing target
-      // (permission denied, no default app, …) — those are genuinely unusual
-      // and worth showing verbatim.
-      store.setError(
-        missingTargetMessage(reason, path, store.settings?.locale)
-          ?? (reason instanceof Error ? reason.message : String(reason)),
-      );
-    });
+    return;
   }
+  // "system-browser" and "external" both go through openArtifactExternal; the
+  // main process guards executable extensions (existing behaviour).
+  void api.openArtifactExternal({ projectId, path }).catch((reason: unknown) => {
+    // Fall back to the raw message for anything that is not a missing target
+    // (permission denied, no default app, …) — those are genuinely unusual
+    // and worth showing verbatim.
+    store.setError(
+      missingTargetMessage(reason, path, store.settings?.locale)
+        ?? (reason instanceof Error ? reason.message : String(reason)),
+    );
+  });
 }
 
 
@@ -1460,7 +1461,19 @@ function XtermPane({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchNoResult, setSearchNoResult] = useState(false);
+  // True when the overlay is searching an alternate-screen pane whose
+  // transcript is unavailable: matches then cover the visible screen only, and
+  // the overlay shows a scope hint next to the input.
+  const [searchVisibleOnly, setSearchVisibleOnly] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // Latest query mirrored into a ref so the pane-search entry point (captured
+  // by the xterm mount-effect closure) can carry it into the reader without a
+  // stale closure; searchOpenSeqRef makes the async transcript probe
+  // latest-wins on rapid Ctrl+F presses; openPaneSearchRef is the stable entry
+  // point that closure calls.
+  const searchQueryRef = useRef("");
+  const searchOpenSeqRef = useRef(0);
+  const openPaneSearchRef = useRef<() => void>(() => {});
   // F: search-as-you-type — the pending debounce timer plus the overlay
   // input's own IME composition guard (separate from composingRef, which
   // protects the terminal's helper textarea, not this DOM input).
@@ -1483,6 +1496,22 @@ function XtermPane({
   const touchScrollResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingInputLengthRef = useRef(0);
   const clearNextDeleteRef = useRef(false);
+  // PTY geometry ownership (shared/pty-geometry.ts): the grid this desktop
+  // tile last handed to resizeTerminal, and the grid main last reported for
+  // this terminal (terminalGeometryChanged push). The dedupe NEVER skips a
+  // re-send when main's truth diverged from what we sent — that stale-cache
+  // skip was what left the bottom of an agent pane blank until a manual
+  // refresh (a phone's rows-only claim shrank the shared ConPTY and this tile
+  // "already sent" its size).
+  const lastSentGeometryRef = useRef<PtyGridGeometry | null>(null);
+  const externalGeometryRef = useRef<PtyGridGeometry | null>(null);
+  // Every desktop resizeTerminal call below funnels through here so the
+  // re-assert dedupe knows what main was last told. Optimistically treats the
+  // sent grid as main's truth; the terminalGeometryChanged echo corrects it.
+  const noteDesktopResizeSent = (cols: number, rows: number): void => {
+    lastSentGeometryRef.current = { cols, rows };
+    externalGeometryRef.current = { cols, rows };
+  };
 
   useEffect(() => {
     if (!isActive || !info.isAgent) return;
@@ -1579,6 +1608,7 @@ function XtermPane({
     requestAnimationFrame(() => {
       if (!window.aiTerminal.isBrowser) {
         if (host) fitTerminalToHost(terminal, host);
+        noteDesktopResizeSent(terminal.cols, terminal.rows);
         void window.aiTerminal.resizeTerminal({
           terminalId: info.id,
           cols: terminal.cols,
@@ -1619,6 +1649,7 @@ function XtermPane({
       if (!window.aiTerminal.isBrowser) {
         const host = hostRef.current;
         if (host) fitTerminalToHost(terminal, host);
+        noteDesktopResizeSent(terminal.cols, terminal.rows);
         void window.aiTerminal.resizeTerminal({ terminalId: info.id, cols: terminal.cols, rows: terminal.rows });
       } else {
         terminal.resize(info.cols, calculateRemoteRows({ fallbackRows: info.rows }));
@@ -1663,6 +1694,82 @@ function XtermPane({
     return () => window.removeEventListener("coterm:reader-toggle", onToggle);
   }, [info.id]);
 
+  // PTY geometry re-assertion (desktop tile). Whenever this tile's view could
+  // have been detached from the shared ConPTY grid — main reports a different
+  // size (another client resized it), the window regained focus/visibility, or
+  // the reader overlay closed — re-fit to the host and re-send the grid. The
+  // dedupe (shouldSendTerminalResize) makes the idle path a no-op (no focus
+  // flash, no ConPTY churn) while a genuinely stolen geometry is always
+  // reclaimed. requireWindowFocus= true only for the externally-triggered
+  // push: a visible-but-UNFOCUSED desktop window must not fight a phone claim
+  // in a loop (main's requestTerminalGeometry arbitration owns that case);
+  // every local trigger below implies the user is at the desktop.
+  const reassertDesktopGeometry = useCallback((requireWindowFocus: boolean): void => {
+    if (window.aiTerminal.isBrowser) return;
+    if (document.visibilityState !== "visible") return;
+    if (requireWindowFocus && !document.hasFocus()) return;
+    // Mid-IME-composition ConPTY re-wrap would shove committed text sideways
+    // (same guard as the ResizeObserver path); the compositionend heal below
+    // re-fits and re-sends unconditionally.
+    if (composingRef.current) return;
+    const terminal = terminalRef.current;
+    const host = hostRef.current;
+    if (!terminal || !host) return;
+    fitTerminalToHost(terminal, host);
+    const local: PtyGridGeometry = { cols: terminal.cols, rows: terminal.rows };
+    if (!shouldSendTerminalResize({
+      lastSent: lastSentGeometryRef.current,
+      local,
+      external: externalGeometryRef.current,
+    })) return;
+    lastSentGeometryRef.current = local;
+    externalGeometryRef.current = local;
+    void window.aiTerminal.resizeTerminal({ terminalId: info.id, cols: local.cols, rows: local.rows });
+  }, [info.id]);
+
+  // External resize notification (main push): another client resized the
+  // shared PTY (a phone's rows-only claim). If the desktop owns the screen
+  // right now (visible + focused), take the grid back immediately — this is
+  // the fix for the half-blank alt-screen pane that only a manual
+  // "refresh terminal" used to heal.
+  useEffect(() => {
+    if (window.aiTerminal.isBrowser) return;
+    const api = window.aiTerminal;
+    if (typeof api.onTerminalGeometryChanged !== "function") return;
+    return api.onTerminalGeometryChanged((payload) => {
+      if (payload.terminalId !== info.id) return;
+      externalGeometryRef.current = { cols: payload.cols, rows: payload.rows };
+      reassertDesktopGeometry(true);
+    });
+  }, [info.id, reassertDesktopGeometry]);
+
+  // Window focus / visibility return: claim the geometry back after the phone
+  // owned it while the user was away, and heal any fit a hidden host skipped
+  // (ResizeObserver cannot measure a display:none / offscreen host).
+  useEffect(() => {
+    if (window.aiTerminal.isBrowser) return;
+    const onFocus = (): void => reassertDesktopGeometry(false);
+    const onVisibility = (): void => {
+      if (document.visibilityState === "visible") reassertDesktopGeometry(false);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [reassertDesktopGeometry]);
+
+  // Reader overlay close: the overlay swap can change the pane's layout
+  // without firing the host ResizeObserver; closing it is exactly the moment
+  // the canvas must re-own the PTY grid.
+  const readerWasOpenRef = useRef(readerOpen);
+  useEffect(() => {
+    const wasOpen = readerWasOpenRef.current;
+    readerWasOpenRef.current = readerOpen;
+    if (wasOpen && !readerOpen) reassertDesktopGeometry(false);
+  }, [readerOpen, reassertDesktopGeometry]);
+
   // direct typing mode: an external toggle (TopBar) asks this terminal to
   // claim focus so the mobile software keyboard pops without the composer.
   useEffect(() => {
@@ -1693,6 +1800,7 @@ function XtermPane({
     return () => {
       setSearchQuery("");
       setSearchNoResult(false);
+      setSearchVisibleOnly(false);
       if (searchTimerRef.current) {
         clearTimeout(searchTimerRef.current);
         searchTimerRef.current = null;
@@ -1701,6 +1809,49 @@ function XtermPane({
       searchRef.current?.clearDecorations();
     };
   }, [searchOpen]);
+
+  // Keep the latest query reachable from the mount-effect keyboard closure.
+  useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  // F: pane-level search entry (magnifier button + Ctrl+F via routeCustomKey).
+  // Normal buffer → SearchAddon overlay over the full scrollback. Alternate-
+  // screen pane → the xterm buffer only holds the visible screen, so search
+  // reroutes to the reader (its transcript IS the pane's full content) with
+  // the box open and any typed query carried over; with no transcript yet
+  // (plain-shell fullscreen program, agent before its first session write) it
+  // falls back to the overlay over the visible screen plus a scope hint.
+  const openPaneSearch = useCallback((): void => {
+    if (terminalRef.current?.buffer.active.type !== "alternate") {
+      setSearchVisibleOnly(false);
+      setSearchOpen(true);
+      return;
+    }
+    const seq = ++searchOpenSeqRef.current;
+    const carryQuery = searchQueryRef.current;
+    const finish = (transcriptAvailable: boolean): void => {
+      if (seq !== searchOpenSeqRef.current) return;
+      const target = planPaneSearchTarget(
+        terminalRef.current?.buffer.active.type === "alternate",
+        transcriptAvailable,
+      );
+      if (target === "reader") {
+        setSearchOpen(false);
+        terminalReaderController.openWithSearch(info.id, carryQuery);
+        return;
+      }
+      setSearchVisibleOnly(target === "visible-only");
+      setSearchOpen(true);
+    };
+    void window.aiTerminal.getTerminalTranscript(info.id)
+      .then((result) => finish(result.status === "ready" && result.messages.length > 0))
+      .catch(() => finish(false));
+  }, [info.id]);
+
+  useEffect(() => {
+    openPaneSearchRef.current = openPaneSearch;
+  });
 
   // F: run a forward/backward search via the SearchAddon. Returns whether a
   // match was found so the overlay can show a "no result" hint. Extracted as a
@@ -2044,7 +2195,7 @@ function XtermPane({
         // needs a local input composer (textarea/contenteditable buffering
         // before PTY send), which the work order explicitly defers.
         selectAll: () => terminal.selectAll(),
-        openSearch: () => setSearchOpen(true),
+        openSearch: () => openPaneSearchRef.current(),
         getSelection: () => hardWrapAwareSelectionText(terminal),
         copyText: (text) => {
           void navigator.clipboard.writeText(text);
@@ -2122,6 +2273,7 @@ function XtermPane({
       clearSharedTextureAtlas();
       if (!window.aiTerminal.isBrowser) {
         fitTerminalToHost(terminal, host);
+        noteDesktopResizeSent(terminal.cols, terminal.rows);
         void window.aiTerminal.resizeTerminal({ terminalId: info.id, cols: terminal.cols, rows: terminal.rows });
       }
       terminal.refresh(0, Math.max(0, terminal.rows - 1));
@@ -2625,6 +2777,7 @@ function XtermPane({
         // stale width (the classic garbled-rows bug). Debounced separately from
         // the canvas work because the IPC is the expensive part.
         if (isDesktop) {
+          noteDesktopResizeSent(terminal.cols, terminal.rows);
           void window.aiTerminal.resizeTerminal({
             terminalId: info.id,
             cols: terminal.cols,
@@ -2905,6 +3058,7 @@ function XtermPane({
       // (used to position the composition-view box) stay correct while typing.
       if (isDesktop && !composingRef.current) {
         resizeTimer = setTimeout(() => {
+          noteDesktopResizeSent(terminal.cols, terminal.rows);
           void window.aiTerminal.resizeTerminal({
             terminalId: info.id,
             cols: terminal.cols,
@@ -2978,6 +3132,7 @@ function XtermPane({
       // Re-fit + re-send once composition ends; idempotent when nothing moved.
       if (isDesktop) {
         fitTerminalToHost(terminal, host);
+        noteDesktopResizeSent(terminal.cols, terminal.rows);
         void window.aiTerminal.resizeTerminal({
           terminalId: info.id,
           cols: terminal.cols,
@@ -4062,7 +4217,7 @@ function XtermPane({
             onClick={(event) => {
               event.stopPropagation();
               onActivate(info.id);
-              setSearchOpen(true);
+              openPaneSearch();
             }}
           >
             <Search size={16} />
@@ -4311,6 +4466,9 @@ function XtermPane({
           />
           {searchNoResult && (
             <span className="xterm-search-noresult">{t("dock.search.noResult")}</span>
+          )}
+          {searchVisibleOnly && (
+            <span className="xterm-search-hint" role="status">{t("dock.search.visibleOnly")}</span>
           )}
           <button
             data-action-id="terminal.search.previous"

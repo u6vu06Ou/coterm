@@ -7,8 +7,11 @@ import {
   buildDockSessionSnapshot,
   parseDockSessionSnapshot,
   SessionRestoreService,
+  type PaneSessionQuery,
+  type ResolvedPaneSession,
 } from "../../src/main/core/session-restore";
 import { AppEventBus } from "../../src/main/core/event-bus";
+import { sessionIdFromFile } from "../../src/main/terminal/session-file-resolver";
 import { DEFAULT_PROFILES } from "../../src/main/providers/profiles-config";
 import type { DockLayout, Project, TerminalInfo } from "../../src/shared/types";
 
@@ -238,12 +241,15 @@ describe("DockLayoutManager.restoreTiles", () => {
 });
 
 describe("SessionRestoreService", () => {
-  async function makeService(): Promise<{
+  async function makeService(options: {
+    resolvePaneSession?: (query: PaneSessionQuery) => Promise<ResolvedPaneSession | null>;
+  } = {}): Promise<{
     dir: string;
     dock: DockLayoutManager;
     spawned: Array<{ id: string; input: Record<string, unknown> }>;
     writes: Array<{ terminalId: string; data: string }>;
     bound: Array<{ terminalId: string; sessionId: string }>;
+    live: Map<string, { cwd: string; info: TerminalInfo }>;
     terminals: {
       get: ReturnType<typeof vi.fn>;
       getLiveCwd: ReturnType<typeof vi.fn>;
@@ -272,8 +278,9 @@ describe("SessionRestoreService", () => {
       events: new AppEventBus(),
       getEnabled: () => enabled.value,
       getProfileTable: () => DEFAULT_PROFILES,
+      ...(options.resolvePaneSession ? { resolvePaneSession: options.resolvePaneSession } : {}),
     });
-    return { ...harness, writes, bound, terminals, service, enabled, cleanup: harness.cleanup };
+    return { ...harness, writes, bound, live, terminals, service, enabled, cleanup: harness.cleanup };
   }
 
   it("restores agent panes with their provider resume command and binds the session id", async () => {
@@ -439,5 +446,151 @@ describe("SessionRestoreService", () => {
     } finally {
       await ctx.cleanup();
     }
+  });
+
+  /**
+   * Live-pane factory: open a real tile through the DockLayoutManager, then
+   * point the service's terminals map at a running agent-session info.
+   */
+  function liveAgentInfo(terminalId: string, cwd: string, overrides: Partial<TerminalInfo> = {}): TerminalInfo {
+    return {
+      id: terminalId,
+      projectId: "p1",
+      title: "agent",
+      cwd,
+      profile: "pwsh",
+      status: "running",
+      pid: 4242,
+      cols: 100,
+      rows: 28,
+      startedAt: "2026-10-23T00:00:00.000Z",
+      isAgent: true,
+      agentProfile: "claude-local-main",
+      nativeSessionId: "launch-random-id",
+      worktreeId: null,
+      label: null,
+      ...overrides,
+    } as unknown as TerminalInfo;
+  }
+
+  async function openLiveAgentTile(ctx: Awaited<ReturnType<typeof makeService>>, overrides: Partial<TerminalInfo> = {}): Promise<string> {
+    await ctx.dock.openTile("p1");
+    const terminalId = ctx.spawned[ctx.spawned.length - 1]!.id;
+    ctx.live.set(terminalId, { cwd: ctx.dir, info: liveAgentInfo(terminalId, ctx.dir, overrides) });
+    return terminalId;
+  }
+
+  it("snapshots the session the pane is ACTUALLY in after an in-session /resume hop", async () => {
+    // 2026-10-23 bug: the stored --session-id stays the launch-time random one
+    // when the user hops with /resume and no reader runs before quit; restore
+    // then resumed an empty launch session instead of the live conversation.
+    const queries: PaneSessionQuery[] = [];
+    const ctx = await makeService({
+      resolvePaneSession: async (query) => {
+        queries.push(query);
+        return { nativeSessionId: "real-current-id", transcriptExists: true };
+      },
+    });
+    try {
+      const terminalId = await openLiveAgentTile(ctx);
+      await ctx.service.saveNow();
+      const parsed = parseDockSessionSnapshot(await readFile(join(ctx.dir, "session-restore.json"), "utf8"));
+      expect(parsed).not.toBeNull();
+      expect(parsed!.panes).toHaveLength(1);
+      // Resolved hop target wins over the stale launch-time id.
+      expect(parsed!.panes[0]!.nativeSessionId).toBe("real-current-id");
+      expect(queries).toHaveLength(1);
+      expect(queries[0]).toMatchObject({
+        terminalId,
+        agentProfile: "claude-local-main",
+        nativeSessionId: "launch-random-id",
+      });
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("stores a null session id when the transcript file no longer exists", async () => {
+    const ctx = await makeService({
+      resolvePaneSession: async () => ({ nativeSessionId: "launch-random-id", transcriptExists: false }),
+    });
+    try {
+      await openLiveAgentTile(ctx);
+      await ctx.service.saveNow();
+      const parsed = parseDockSessionSnapshot(await readFile(join(ctx.dir, "session-restore.json"), "utf8"));
+      expect(parsed!.panes[0]!.nativeSessionId).toBeNull();
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("falls back to the stored id when session resolution is unavailable", async () => {
+    const ctx = await makeService({
+      resolvePaneSession: async () => { throw new Error("resolver blew up"); },
+    });
+    try {
+      await openLiveAgentTile(ctx);
+      await ctx.service.saveNow();
+      const parsed = parseDockSessionSnapshot(await readFile(join(ctx.dir, "session-restore.json"), "utf8"));
+      expect(parsed!.panes[0]!.nativeSessionId).toBe("launch-random-id");
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it("logs per-pane restore metadata (profile, session id presence, transcript existence)", async () => {
+    // logger is a Proxy facade over the active sink; with no initLogger in the
+    // test env it routes to console.log — spy there instead.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const ctx = await makeService({
+      resolvePaneSession: async () => ({ nativeSessionId: "[redacted]", transcriptExists: true }),
+    });
+    try {
+      const snapshot = {
+        version: 1,
+        savedAt: "x",
+        panes: [
+          pane({ cwd: ctx.dir, isAgent: true, agentProfile: "claude-official", nativeSessionId: "official-claude-1" }),
+          pane({ cwd: ctx.dir }),
+        ],
+        selectedIndex: 0,
+        rows: [],
+        cols: [],
+        ptyCols: 100,
+        ptyRows: 28,
+      };
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(join(ctx.dir, "session-restore.json"), JSON.stringify(snapshot), "utf8");
+      const outcome = await ctx.service.restore();
+      expect(outcome.relaunched).toBe(1);
+      const logs = logSpy.mock.calls.filter((call) => typeof call[0] === "string" && call[0].includes("sessionRestore.paneRelaunch"));
+      expect(logs).toHaveLength(1);
+      const meta = logs[0]![1] as Record<string, unknown>;
+      expect(meta).toMatchObject({
+        agentProfile: "claude-official",
+        hasSessionId: true,
+        transcriptExists: true,
+        relaunched: true,
+      });
+      expect(JSON.stringify(meta)).not.toContain("official-claude-1");
+    } finally {
+      logSpy.mockRestore();
+      await ctx.cleanup();
+    }
+  });
+});
+
+describe("sessionIdFromFile", () => {
+  it("extracts the claude session id from ~/.claude/projects/<munged>/<id>.jsonl", () => {
+    const file = join("C:\\Users\\u\\.claude\\projects\\D--workspace-demo", "8bd28ac6-6b02-45f1-98fd-def7424112ec.jsonl");
+    expect(sessionIdFromFile(file, "claude")).toBe("8bd28ac6-6b02-45f1-98fd-def7424112ec");
+    expect(sessionIdFromFile(join("x", "not a session.txt"), "claude")).toBeNull();
+  });
+
+  it("extracts the codex rollout uuid suffix and rejects non-rollout names", () => {
+    const rollout = join("C:\\Users\\u\\.codex\\sessions\\2026\\10\\23", "rollout-2026-10-23T00-26-01-7dda5fbd-1b2e-4d03-92ab-fe861644b85e.jsonl");
+    expect(sessionIdFromFile(rollout, "codex")).toBe("7dda5fbd-1b2e-4d03-92ab-fe861644b85e");
+    expect(sessionIdFromFile(join("x", "rollout-no-uuid.jsonl"), "codex")).toBeNull();
+    expect(sessionIdFromFile(join("x", "anything.jsonl"), "unsupported")).toBeNull();
   });
 });

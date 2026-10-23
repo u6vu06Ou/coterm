@@ -586,6 +586,7 @@ export const zhTW = {
   "dock.search.close": "關閉搜尋",
   "dock.search.noResult": "找不到",
   "dock.search.aria": "搜尋終端機內容",
+  "dock.search.visibleOnly": "全螢幕程式：只能搜尋目前畫面",
   "reader.search.placeholder": "搜尋對話內容",
   "reader.search.results.aria": "閱讀器搜尋結果",
   "reader.composer.placeholder": "輸入指令送給此 agent…",

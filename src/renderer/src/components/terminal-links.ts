@@ -663,3 +663,17 @@ export function findTerminalLinks(text: string, cwd?: string): TerminalLinkMatch
   out.sort((a, b) => a.index - b.index);
   return out;
 }
+
+// Where a file-path link click routes (2026-10-23 maintainer: 預設瀏覽器優先).
+// .html/.htm on a desktop shell go straight to the system default browser —
+// Coterm 的內嵌彈出窗會被 preview 回應的 CSP 擋掉腳本，只能看到頁面頂部。
+// Previewable types keep the in-app panel; everything else opens externally.
+export type TerminalPathOpenAction = "system-browser" | "panel" | "external";
+
+export function defaultActionForTerminalPath(
+  path: string,
+  canOpenSystemBrowser: boolean,
+): TerminalPathOpenAction {
+  if (/\.html?$/i.test(path)) return canOpenSystemBrowser ? "system-browser" : "panel";
+  return classifyTerminalPath(path) === "artifact" ? "panel" : "external";
+}

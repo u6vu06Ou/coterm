@@ -1,4 +1,8 @@
 import {
+  decideRemoteGeometryClaim,
+  type PtyGeometryAssertion,
+} from "@shared/pty-geometry";
+import {
   artifactReadInputSchema,
   artifactWriteInputSchema,
   artifactTokenInputSchema,
@@ -147,9 +151,14 @@ interface AppOperationsDependencies {
   checkpointer?: CheckpointManager;
   workspaceShell?: WorkspaceShell;
   browser?: BrowserRuntimeManager;
-  transcriptService?: Pick<TerminalTranscriptService, "get" | "resolveSessionFile">;
+  transcriptService?: Pick<TerminalTranscriptService, "get" | "resolveSessionFile" | "forgetBinding">;
   /** Codex Team config template dir (bundling contract); absent in tests. */
   codexTeamTemplateDir?: string;
+  /** Desktop window visible && focused — injected from index.ts. Geometry
+   *  arbitration (shared/pty-geometry.ts): while this holds, a remote
+   *  rows-claim must not resize the shared PTY out from under the desktop's
+   *  fitted grid. Absent (tests) = desktop treated as inactive. */
+  isDesktopWindowActive?: () => boolean;
 }
 
 /** Same clientMutationId reused with a different payload (work order §10.4). */
@@ -167,7 +176,14 @@ export interface TerminalWriteResult {
 }
 
 export class AppOperations {
-  private readonly transcriptService: Pick<TerminalTranscriptService, "get" | "resolveSessionFile">;
+  private readonly transcriptService: Pick<TerminalTranscriptService, "get" | "resolveSessionFile" | "forgetBinding">;
+  /** Geometry ownership (shared/pty-geometry.ts): the grid each terminal's
+   *  desktop tile last asserted via resizeTerminal. Remote rows-only claims
+   *  (requestTerminalGeometry) are checked against this while a desktop
+   *  window is visible+focused, so a phone can no longer shrink Claude Code's
+   *  alternate screen out from under the desktop pane. Bounded by tile count
+   *  (≤8) and pruned on terminalExit. */
+  private readonly desktopGeometryAssertions = new Map<string, PtyGeometryAssertion>();
 
   constructor(private readonly dependencies: AppOperationsDependencies) {
     this.transcriptService = dependencies.transcriptService ?? new TerminalTranscriptService();
@@ -177,6 +193,7 @@ export class AppOperations {
     // (which also emits terminalExit); handleTerminalExit is idempotent, so
     // that double delivery is a no-op.
     this.dependencies.events.on("terminalExit", (payload) => {
+      this.desktopGeometryAssertions.delete(payload.terminalId);
       // Only reclaim when the dock manager already exists — never construct it
       // here (an exit for a terminal that never had a tile must not touch the
       // layout file).
@@ -1104,6 +1121,13 @@ export class AppOperations {
   resizeTerminal(input: unknown): void {
     const parsed = terminalResizeInputSchema.parse(input);
     this.dependencies.terminals.resize(parsed.terminalId, parsed.cols, parsed.rows);
+    // Record the desktop tile's assertion BEFORE the PTY debounce lands so a
+    // racing remote claim arbitrates against it immediately.
+    this.desktopGeometryAssertions.set(parsed.terminalId, {
+      cols: parsed.cols,
+      rows: parsed.rows,
+      at: Date.now(),
+    });
     // Broadcast the new geometry to all clients (web/mobile) so they resize
     // their local xterm to match the shared PTY, preventing re-wrap garble.
     void this.dock.setPtyGeometry(parsed.cols, parsed.rows);
@@ -1122,15 +1146,29 @@ export class AppOperations {
    * and no re-wrap churn hits other clients' scrollback. Desktop tiles
    * reclaim the geometry on their next fit (ResizeObserver → resizeTerminal),
    * which is exactly how a desktop re-layout already returns ownership.
+   *
+   * Arbitration (shared/pty-geometry.ts, 2026-10-23): while a desktop window
+   * is visible+focused and that desktop asserted this terminal's grid, a
+   * disagreeing claim is IGNORED — previously the phone's smaller rows won
+   * and Claude Code's alternate screen redrew into the top of the desktop
+   * pane, leaving the bottom blank until a manual refresh. When the desktop
+   * is not active the claim applies; the desktop tile re-asserts its fitted
+   * grid on window focus / visibility return / reader close.
    */
   requestTerminalGeometry(input: unknown): void {
     const parsed = terminalResizeInputSchema.parse(input);
     const terminal = this.dependencies.terminals.get(parsed.terminalId);
     if (!terminal) return;
     const rows = Math.max(8, Math.min(160, parsed.rows));
-    if (terminal.rows === rows) return;
-    this.dependencies.terminals.resize(parsed.terminalId, terminal.cols, rows);
-    void this.dock.setPtyGeometry(terminal.cols, rows);
+    const decision = decideRemoteGeometryClaim({
+      claim: { cols: terminal.cols, rows },
+      current: { cols: terminal.cols, rows: terminal.rows },
+      desktopAssertion: this.desktopGeometryAssertions.get(parsed.terminalId) ?? null,
+      desktopActive: this.dependencies.isDesktopWindowActive?.() ?? false,
+    });
+    if (decision.kind === "ignore") return;
+    this.dependencies.terminals.resize(parsed.terminalId, decision.geometry.cols, decision.geometry.rows);
+    void this.dock.setPtyGeometry(decision.geometry.cols, decision.geometry.rows);
   }
   async refreshTerminal(terminalId: unknown): Promise<void> {
     const id = idSchema.parse(terminalId);
@@ -1239,6 +1277,16 @@ export class AppOperations {
       transcriptPath,
       resumeCommand,
     };
+  }
+  /**
+   * Drop the transcript resolver's followed binding for a terminal. Wired from
+   * the context battery's live-session follower: when a pane's nativeSessionId
+   * is rebound to the session Claude's own sessions/<pid>.json reports (the
+   * in-session /resume-to-older case), the resolver's stale followed binding
+   * would otherwise keep the reader on the pre-/resume file forever.
+   */
+  forgetTerminalSessionBinding(terminalId: string): void {
+    this.transcriptService.forgetBinding(terminalId);
   }
   markTerminalAgent(input: unknown) {
     const parsed = terminalMarkAgentInputSchema.parse(input);

@@ -16,6 +16,7 @@ const ReaderMessageRow = memo(function ReaderMessageRow({
   index,
   feedback,
   isNewestAssistant,
+  isActiveSearchHit,
   onCopy,
 }: {
   message: TerminalTranscriptMessage;
@@ -23,6 +24,7 @@ const ReaderMessageRow = memo(function ReaderMessageRow({
   index: number;
   feedback: "ok" | "error" | null;
   isNewestAssistant: boolean;
+  isActiveSearchHit: boolean;
   onCopy: (message: TerminalTranscriptMessage, key: string) => void;
 }): React.JSX.Element {
   const label = readerMessageLabel(message);
@@ -31,7 +33,7 @@ const ReaderMessageRow = memo(function ReaderMessageRow({
     <article
       data-message-index={index}
       data-turn-anchor={message.role === "user" ? index : undefined}
-      className={`terminal-reader-message terminal-reader-${message.role} ${isSummary ? "terminal-reader-summary" : ""} ${isNewestAssistant ? "terminal-reader-message-new" : ""}`}
+      className={`terminal-reader-message terminal-reader-${message.role} ${isSummary ? "terminal-reader-summary" : ""} ${isNewestAssistant ? "terminal-reader-message-new" : ""} ${isActiveSearchHit ? "terminal-reader-message-search-hit" : ""}`}
     >
       <div className="terminal-reader-message-label">
         <span>{label}</span>
@@ -52,7 +54,7 @@ const ReaderMessageRow = memo(function ReaderMessageRow({
   );
 });
 
-export function ConversationReader({ messages, emptyLabel, highlightLastAssistant = false }: { messages: TerminalTranscriptMessage[]; emptyLabel: string; highlightLastAssistant?: boolean }): React.JSX.Element {
+export function ConversationReader({ messages, emptyLabel, highlightLastAssistant = false, searchHitMessageIndex = null }: { messages: TerminalTranscriptMessage[]; emptyLabel: string; highlightLastAssistant?: boolean; searchHitMessageIndex?: number | null }): React.JSX.Element {
   // Copy feedback per message ("已複製" check / "複製失敗") — one flash, 1.5s.
   const [copyFeedback, setCopyFeedback] = useState<{ key: string; kind: "ok" | "error" } | null>(null);
   const copyFeedbackTimerRef = useRef<number | null>(null);
@@ -92,6 +94,7 @@ export function ConversationReader({ messages, emptyLabel, highlightLastAssistan
             index={index}
             feedback={copyFeedback !== null && copyFeedback.key === messageKey ? copyFeedback.kind : null}
             isNewestAssistant={isNewestAssistant}
+            isActiveSearchHit={searchHitMessageIndex === index}
             onCopy={copyMessage}
           />
         );

@@ -159,6 +159,32 @@ export interface SessionRestoreServiceDependencies {
   getEnabled: () => boolean;
   /** Active profile table (built-ins ⊕ settings.customProfiles), for the resume allowlist. */
   getProfileTable: () => Record<string, ClaudeProfile>;
+  /**
+   * Best-effort resolution of the session the pane is ACTUALLY in. The pane's
+   * stored nativeSessionId is the --session-id Coterm assigned at launch; an
+   * in-session /resume, /clear, or compact moves the agent to a NEW transcript
+   * id, and the stored one only catches up when a transcript read runs
+   * (reader / Session 資訊 block). Resolving here (same hop-following logic as
+   * the reader) makes the snapshot resume the conversation the user sees, not
+   * the stale empty launch session. null return = resolution failed → keep the
+   * stored id (old behavior).
+   */
+  resolvePaneSession?: (query: PaneSessionQuery) => Promise<ResolvedPaneSession | null>;
+}
+
+export interface PaneSessionQuery {
+  terminalId: string;
+  cwd: string;
+  startedAt: string;
+  nativeSessionId: string | null;
+  agentProfile: string;
+}
+
+export interface ResolvedPaneSession {
+  /** The current session id after following /resume-/clear-hops. */
+  nativeSessionId: string | null;
+  /** Whether the transcript file for that id actually exists on disk. */
+  transcriptExists: boolean;
 }
 
 export class SessionRestoreService {
@@ -229,7 +255,8 @@ export class SessionRestoreService {
       if (!this.pendingSave) return;
       this.pendingSave = false;
       const layout = await this.dependencies.dock.getDockLayout();
-      const snapshot = buildDockSessionSnapshot(layout, (terminalId) => this.describePane(terminalId));
+      const resolved = await this.resolveAgentSessions(layout);
+      const snapshot = buildDockSessionSnapshot(layout, (terminalId) => this.describePane(terminalId, resolved));
       await this.writeSnapshot(snapshot);
     }).catch((error: unknown) => {
       logger.warn("app", "sessionRestore.save.failed", "Failed to persist the session-restore snapshot.", {
@@ -239,16 +266,60 @@ export class SessionRestoreService {
     return this.inFlight;
   }
 
-  private describePane(terminalId: string): DockRestoredPane | null {
+  /**
+   * Ask the session-file resolver where each live agent pane's transcript
+   * currently is, so an in-session /resume / /clear hop is snapshotted even
+   * when no reader ran since (2026-10-23 bug: the stored --session-id stayed
+   * the launch-time random one, restore resumed an EMPTY fresh session while
+   * the real conversation was one hop over). Also emits the per-pane metadata
+   * log line. Sequential on purpose (a handful of panes, fs stats only).
+   */
+  private async resolveAgentSessions(layout: DockLayout): Promise<Map<string, ResolvedPaneSession>> {
+    const out = new Map<string, ResolvedPaneSession>();
+    const resolve = this.dependencies.resolvePaneSession;
+    for (const tile of layout.tiles) {
+      const info = this.dependencies.terminals.get(tile.terminalId);
+      if (!info || info.status !== "running" || !info.isAgent || !info.agentProfile) continue;
+      let resolved: ResolvedPaneSession | null = null;
+      if (resolve) {
+        resolved = await resolve({
+          terminalId: tile.terminalId,
+          cwd: this.dependencies.terminals.getLiveCwd(tile.terminalId) ?? info.cwd,
+          startedAt: info.startedAt,
+          nativeSessionId: info.nativeSessionId,
+          agentProfile: info.agentProfile,
+        }).catch(() => null);
+      }
+      if (resolved) out.set(tile.terminalId, resolved);
+      logger.info("app", "sessionRestore.pane", "Snapshot candidate pane.", {
+        terminalId: tile.terminalId,
+        agentProfile: info.agentProfile,
+        hasSessionId: Boolean(resolved?.nativeSessionId ?? info.nativeSessionId),
+        transcriptExists: resolved?.transcriptExists ?? null,
+      });
+    }
+    return out;
+  }
+
+  private describePane(
+    terminalId: string,
+    resolved: Map<string, ResolvedPaneSession>,
+  ): DockRestoredPane | null {
     const info = this.dependencies.terminals.get(terminalId);
     if (!info || info.status !== "running") return null;
+    // Store the resolved (post-hop) id, but only while its transcript file
+    // exists — resuming a dead id makes claude fall back to its picker.
+    const resolution = resolved.get(terminalId);
+    const nativeSessionId = resolution
+      ? (resolution.transcriptExists ? resolution.nativeSessionId : null)
+      : info.nativeSessionId;
     return {
       projectId: info.projectId,
       cwd: this.dependencies.terminals.getLiveCwd(terminalId) ?? info.cwd,
       profile: info.profile,
       isAgent: info.isAgent,
       agentProfile: info.agentProfile,
-      nativeSessionId: info.nativeSessionId,
+      nativeSessionId,
       worktreeId: info.worktreeId,
       label: info.label ?? null,
     };
@@ -304,7 +375,27 @@ export class SessionRestoreService {
       // have fallen back to the project workspace when the stored directory
       // no longer exists.
       const cwd = this.dependencies.terminals.getLiveCwd(terminalId) ?? pane.cwd;
+      // Metadata-only evidence for the boot log: did this pane carry a session
+      // id, and does its transcript still exist (dead id -> claude's picker)?
+      let transcriptExists: boolean | null = null;
+      if (this.dependencies.resolvePaneSession) {
+        const info = this.dependencies.terminals.get(terminalId);
+        transcriptExists = await this.dependencies.resolvePaneSession({
+          terminalId,
+          cwd,
+          startedAt: info?.startedAt ?? "",
+          nativeSessionId: pane.nativeSessionId,
+          agentProfile: pane.agentProfile,
+        }).then((resolved) => resolved?.transcriptExists ?? null, () => null);
+      }
       const command = buildSessionResumeCommand(pane.agentProfile, cwd, pane.nativeSessionId, profileTable);
+      logger.info("app", "sessionRestore.paneRelaunch", "Restored agent pane relaunch decision.", {
+        terminalId,
+        agentProfile: pane.agentProfile,
+        hasSessionId: Boolean(pane.nativeSessionId),
+        transcriptExists,
+        relaunched: Boolean(command),
+      });
       if (!command) {
         logger.warn("app", "sessionRestore.relaunch.unsupported", "Restored agent pane left as a plain shell; profile is unknown or not resume-capable.", {
           agentProfile: pane.agentProfile,

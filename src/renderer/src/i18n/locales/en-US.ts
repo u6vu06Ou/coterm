@@ -588,6 +588,7 @@ export const enUS = {
   "dock.search.close": "Close search",
   "dock.search.noResult": "No matches",
   "dock.search.aria": "Search in terminal",
+  "dock.search.visibleOnly": "Full-screen program: only the visible screen is searchable",
   "reader.search.placeholder": "Search conversation",
   "reader.search.results.aria": "Reader search results",
   "reader.composer.placeholder": "Send a command to this agent…",
