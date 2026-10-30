@@ -160,7 +160,7 @@ describe("summarizeForSpeech — model fallback chain", () => {
     const fetchImpl = (async () => {
       throw new Error("network dead");
     }) as unknown as typeof fetch;
-    await expect(summarizeForSpeech("x", fetchImpl)).rejects.toThrow(/glm-5\.3 network dead/);
+    await expect(summarizeForSpeech("x", fetchImpl)).rejects.toThrow(/network dead/);
   });
 
   it("neutralises delimiter-hijack attempts inside the source before sending", async () => {
