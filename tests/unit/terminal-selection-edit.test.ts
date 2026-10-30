@@ -37,9 +37,7 @@ function mkRow(
 
 function geom(partial: Partial<SelectionEditInput> & Pick<SelectionEditInput, "rows" | "cursor" | "selection">): SelectionEditInput {
   return { baseY: 0, altScreen: false, ...partial };
-}
-
-describe("planSelectionEdit — single-line input", () => {
+}describe("planSelectionEdit — single-line input", () => {
   const row = mkRow("❯ hello world"); // 13 cells: ❯ ␠ h e l l o ␠ w o r l d
 
   it("selection ending at the cursor erases exactly the highlighted chars", () => {
@@ -163,6 +161,113 @@ describe("planSelectionEdit — soft-wrapped input lines", () => {
   });
 });
 
+describe("planSelectionEdit — absolute cursor row (scrollback present)", () => {
+  // Regression: the caller handed the planner a VIEWPORT-relative cursor row
+  // while getSelectionPosition() is ABSOLUTE. With any scrollback the cursor
+  // row fell outside the row window and every delete was refused — the visible
+  // bug "selecting in the prompt and pressing Backspace deletes nothing".
+  const outRow = mkRow("earlier output");
+  const promptRow = mkRow("❯ hello world");
+
+  it("translates when the window is anchored below the top of the buffer", () => {
+    const plan = planSelectionEdit(
+      geom({
+        rows: [outRow, promptRow],
+        baseY: 40, // 40 scrollback rows above this window
+        cursor: { x: 13, y: 41 },
+        selection: { start: { x: 2, y: 41 }, end: { x: 13, y: 41 } },
+      }),
+      "backspace",
+    );
+    expect(plan).toEqual({ sequence: BS.repeat(11), deletedChars: 11 }); // "hello world"
+  });
+
+  it("still refuses when the absolute cursor row is outside the window", () => {
+    expect(
+      planSelectionEdit(
+        geom({
+          rows: [outRow, promptRow],
+          baseY: 40,
+          cursor: { x: 15, y: 39 }, // one row above the window
+          selection: { start: { x: 4, y: 41 }, end: { x: 10, y: 41 } },
+        }),
+        "backspace",
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("planSelectionEdit — multi-row prompt input", () => {
+  // Claude Code / Codex usually run INLINE (normal buffer), so the input line is
+  // a SOFT-WRAPPED group, not an alt-screen row. The old alt-screen-only rule
+  // never fired here; the group rule must.
+  // cols = 10: "❯ abcdefgh" fills row 0, "ijkl" continues on row 1.
+  const row0 = mkRow("❯ abcdefgh");
+  const row1 = mkRow("ijkl", { wrapped: true, pad: 6 });
+
+  it("inline (normal buffer) selection across the wrap deletes across it", () => {
+    const plan = planSelectionEdit(
+      geom({ rows: [row0, row1], cursor: { x: 4, y: 1 }, selection: { start: { x: 8, y: 0 }, end: { x: 2, y: 1 } } }),
+      "backspace",
+    );
+    expect(plan!.deletedChars).toBe(4);
+    expect(plan!.sequence).toBe(L.repeat(2) + BS.repeat(4));
+  });
+
+  it("inline selection on the caret row while rows above are wrapped group still works", () => {
+    const plan = planSelectionEdit(
+      geom({ rows: [row0, row1], cursor: { x: 4, y: 1 }, selection: { start: { x: 0, y: 1 }, end: { x: 4, y: 1 } } }),
+      { char: "Z" },
+    );
+    expect(plan!.sequence).toBe(BS.repeat(4) + "Z");
+  });
+
+  it("alternate screen: the caret row alone is the input line when no hard wrap holds", () => {
+    const prompt = mkRow("❯ hello");
+    const plan = planSelectionEdit(
+      geom({ rows: [prompt], cursor: { x: 7, y: 0 }, selection: { start: { x: 2, y: 0 }, end: { x: 4, y: 0 } }, altScreen: true, cols: 20 }),
+      "backspace",
+    );
+    expect(plan!.deletedChars).toBe(2);
+  });
+
+  it("alternate screen: a TUI hard-wrapped input row is joined over its wrap", () => {
+    // Fullscreen TUI wraps its own input: row 0 is filled to cols - 1 and row 1
+    // continues it, with isWrapped staying false.
+    const head = mkRow(`❯ ${"a".repeat(17)}`); // 19 cells, cols = 20 → hard wrap
+    const tail = mkRow("bcdef", { pad: 4 });
+    const plan = planSelectionEdit(
+      geom({
+        rows: [head, tail],
+        cursor: { x: 5, y: 1 },
+        selection: { start: { x: 16, y: 0 }, end: { x: 3, y: 1 } },
+        altScreen: true,
+        cols: 20,
+      }),
+      "backspace",
+    );
+    // selected "aaa" (cols 16-18) + "bcd" = 6 chars; sel end offset 22, cursor 24.
+    expect(plan!.deletedChars).toBe(6);
+    expect(plan!.sequence).toBe(L.repeat(2) + BS.repeat(6));
+  });
+
+  it("alternate screen: a selection reaching past a real hard-wrap break still refuses", () => {
+    const shortHead = mkRow("❯ abc"); // ends short of cols - 1 → no hard wrap
+    const caretRow = mkRow("de", { pad: 10 });
+    const plan = planSelectionEdit(
+      geom({
+        rows: [shortHead, caretRow],
+        cursor: { x: 2, y: 1 },
+        selection: { start: { x: 2, y: 0 }, end: { x: 2, y: 1 } },
+        altScreen: true,
+        cols: 20,
+      }),
+      "backspace",
+    );
+    expect(plan).toBeNull();
+  });
+});
+
 describe("planSelectionEdit — refuses unsafe translations (caller falls back)", () => {
   const promptRow = mkRow("❯ hello");
   const outRow = mkRow("previous output");
@@ -196,7 +301,7 @@ describe("planSelectionEdit — refuses unsafe translations (caller falls back)"
   it("alternate screen: a selection off the caret's row stays clear-only → null", () => {
     expect(
       planSelectionEdit(
-        geom({ rows: [outRow, promptRow], cursor: { x: 7, y: 1 }, selection: { start: { x: 0, y: 0 }, end: { x: 4, y: 1 } }, altScreen: true }),
+        geom({ rows: [outRow, promptRow], cursor: { x: 7, y: 1 }, selection: { start: { x: 0, y: 0 }, end: { x: 4, y: 1 } }, altScreen: true, cols: 40 }),
         "backspace",
       ),
     ).toBeNull();

@@ -640,6 +640,7 @@ function createMockApi(): AiTerminalApi {
     getPtyState: () => Promise.resolve("done" as const),
     // Keepalive mock: per-window in-memory map so the header +/- round-trips.
     exportTerminalHandoff: () => Promise.resolve({ ok: false as const, error: "mock_unavailable" }),
+    requestReadAloud: () => Promise.resolve({ ok: false as const, error: "mock_unavailable" }),
     setTerminalKeepalive: (input) => {
       const terminal = terminals.find((t) => t.id === input.terminalId) ?? null;
       const state: TerminalKeepaliveState = {

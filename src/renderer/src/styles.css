@@ -7785,6 +7785,51 @@ body[data-coterm-input-owner="mobile-composer"] .xterm-host-remote {
   background: color-mix(in srgb, var(--text-soft, #9a9a9a) 12%, transparent);
   color: var(--text, #e6e6e6);
 }
+/* 朗讀 button — same chrome as the clean-view eye toggle; lit while speaking. */
+.xterm-read-aloud {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-soft, #9a9a9a);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.xterm-read-aloud:hover {
+  background: color-mix(in srgb, var(--text-soft, #9a9a9a) 12%, transparent);
+  color: var(--text, #e6e6e6);
+}
+.xterm-read-aloud.is-playing {
+  color: var(--accent, #f2b234);
+}
+.xterm-read-aloud .is-spinning {
+  animation: coterm-handoff-spin 0.9s linear infinite;
+}
+/* Spoken-script toast: shows what the voice is saying so the user can
+   verify. Fixed bottom-center, above the dock. */
+.read-aloud-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 72px;
+  transform: translateX(-50%);
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--panel, #1c1c1e);
+  color: var(--text, #e6e6e6);
+  border: 1px solid color-mix(in srgb, var(--text-soft, #9a9a9a) 25%, transparent);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.35);
+  font-size: 13px;
+  line-height: 1.5;
+  z-index: 4000;
+  pointer-events: none;
+}
 /* A−/A+ font step buttons (desktop only — mobile uses pinch + auto-fill). */
 .xterm-font-step {
   display: inline-flex;

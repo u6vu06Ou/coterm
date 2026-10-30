@@ -379,7 +379,9 @@ function setArtifactPreviewHeaders(response: ServerResponse): void {
 }
 
 function setSecurityHeaders(response: ServerResponse): void {
-  response.setHeader("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*");
+  // media-src: the 朗讀 button plays its mp3 from an in-memory blob: URL (the
+  // same allowance the desktop renderer CSP has had all along).
+  response.setHeader("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("X-Frame-Options", "DENY");

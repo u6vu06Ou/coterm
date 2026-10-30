@@ -1,5 +1,11 @@
 import type { TerminalInfo, AgentApiSessionSemanticState } from "@shared/types";
-import { shellTitle } from "@shared/terminal";
+import { isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
+
+// Placeholder rules (provider title markers, not summaries) live in
+// @shared/terminal so main's applyTitleToInfo / toast title, which need the
+// same answer, cannot drift from the renderer. Re-exported for existing
+// renderer call sites and tests.
+export { isPlaceholderSessionTitle };
 
 type DisplayTitleInfo = Pick<TerminalInfo, "isAgent" | "profile" | "cwd" | "title" | "agentSummaryTitle">
   & { agentProfile?: TerminalInfo["agentProfile"] };
@@ -90,10 +96,6 @@ export function tabDisplayMode(widthPx: number): TopbarTabMode {
   return "minimal";
 }
 
-export function isPlaceholderSessionTitle(title: string | null | undefined): boolean {
-  return Boolean(title && /^[^\p{L}\p{N}]*Claude Code$/iu.test(title.trim()));
-}
-
 /**
  * Pick the header session summary for a tile. A title equal to the cwd
  * basename is no summary (Codex only writes its workspace folder into OSC 0)
@@ -137,13 +139,19 @@ export function resolveSemanticSessionSummary(
  * assistant-sentence fallback for agents that never set a title. Letting
  * semantic override the native title replaces a real summary with live
  * narration — regression shipped in v1.5.13-beta.0, do not re-invert.
+ *
+ * The fallback is NOT limited to the active tile: claude-team panes publish
+ * nothing but provider placeholders ("◐ Claude Code", shim "claude"), so their
+ * native title is always empty and an active-only fallback left every
+ * non-selected tile and every top-bar tab blank while the selected one was the
+ * only readable pane. Callers only poll the projection while the native title
+ * is missing, so quiet panes cost nothing.
  */
 export function resolvePaneDisplayTitle(
   info: DisplayTitleInfo,
   sessionTitle: string | null,
   semanticSessionSummary: string | null,
-  isActive: boolean,
 ): string | null {
   return resolveDisplayTitle(info, sessionTitle)
-    ?? (isActive && info.isAgent ? semanticSessionSummary : null);
+    ?? (info.isAgent ? semanticSessionSummary : null);
 }

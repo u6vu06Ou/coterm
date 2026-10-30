@@ -1,7 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { cwdBasename, marqueeDurationSeconds, resolveDisplayTitle, resolvePaneDisplayTitle, resolveSemanticSessionSummary, shouldMarqueeSessionSummary, shortCwd, tabDisplayMode } from "../../src/renderer/src/components/terminal-display-title";
+import { cwdBasename, isPlaceholderSessionTitle, marqueeDurationSeconds, resolveDisplayTitle, resolvePaneDisplayTitle, resolveSemanticSessionSummary, shouldMarqueeSessionSummary, shortCwd, tabDisplayMode } from "../../src/renderer/src/components/terminal-display-title";
 
 const agentInfo = { isAgent: true, profile: "pwsh", cwd: "D:\\workspace\\sync_party", title: "sync_party" } as const;
+
+describe("isPlaceholderSessionTitle", () => {
+  it("refuses provider markers but keeps real summaries", () => {
+    expect(isPlaceholderSessionTitle("◐ Claude Code")).toBe(true);
+    expect(isPlaceholderSessionTitle("✳ Claude Code")).toBe(true);
+    expect(isPlaceholderSessionTitle("⠧ Claude Code")).toBe(true);
+    expect(isPlaceholderSessionTitle("claude")).toBe(true);
+    expect(isPlaceholderSessionTitle("CLAUDE")).toBe(true);
+    // Star prefix on the bare form (not just on "Claude Code").
+    expect(isPlaceholderSessionTitle("✳ claude")).toBe(true);
+    // Launcher shim spellings and a spinner-only frame carry no information.
+    expect(isPlaceholderSessionTitle("claude.cmd")).toBe(true);
+    expect(isPlaceholderSessionTitle("Claude.exe")).toBe(true);
+    expect(isPlaceholderSessionTitle("⠧")).toBe(true);
+    expect(isPlaceholderSessionTitle("Fixing auth bug")).toBe(false);
+    expect(isPlaceholderSessionTitle("claude-team")).toBe(false);
+    expect(isPlaceholderSessionTitle(null)).toBe(false);
+    expect(isPlaceholderSessionTitle("   ")).toBe(true);
+  });
+
+  // Documented trade-off: a project or task literally named "Claude" can never
+  // be the summary — the same rule the cwd-basename filter already applies.
+  it("is case-insensitive on purpose", () => {
+    expect(isPlaceholderSessionTitle("cLaUdE")).toBe(true);
+  });
+});
 
 describe("cwdBasename", () => {
   it("normalizes Windows separators and trailing slashes", () => {
@@ -61,7 +87,6 @@ describe("resolveDisplayTitle", () => {
       { ...agentInfo, agentSummaryTitle: "Explain the llm-tools codebase" },
       "sync_party",
       "我在檢查 config 的細節。",
-      true,
     )).toBe("Explain the llm-tools codebase");
   });
 
@@ -83,14 +108,15 @@ describe("resolvePaneDisplayTitle", () => {
       { ...agentInfo, title: "Fixing auth bug" },
       null,
       "我在檢查 config 的細節——這裡八成是舊設定殘留。",
-      true,
     )).toBe("Fixing auth bug");
   });
 
-  it("uses the semantic projection only as fallback on the active agent tile", () => {
-    expect(resolvePaneDisplayTitle(agentInfo, null, "Doing things", true)).toBe("Doing things");
-    expect(resolvePaneDisplayTitle(agentInfo, null, "Doing things", false)).toBe(null);
-    expect(resolvePaneDisplayTitle({ ...agentInfo, isAgent: false }, null, "Doing things", true)).toBe(null);
+  it("uses the semantic projection as fallback for every agent tile", () => {
+    // Not gated on the selected tile: claude-team panes have no native title at
+    // all, so an active-only fallback left the tab strip and the unselected
+    // tiles showing the placeholder while only the selected pane was readable.
+    expect(resolvePaneDisplayTitle(agentInfo, null, "Doing things")).toBe("Doing things");
+    expect(resolvePaneDisplayTitle({ ...agentInfo, isAgent: false }, null, "Doing things")).toBe(null);
   });
 
   // v1.5.19 shipped a claude-/codex- early return that accepted ONLY
@@ -98,17 +124,35 @@ describe("resolvePaneDisplayTitle", () => {
   // (Claude Code publishes its summary through OSC 0, not that field).
   it("keeps the Claude OSC title as the header summary", () => {
     const claude = { ...agentInfo, agentProfile: "claude-official" as const, title: "Fixing the IME scroll lock" };
-    expect(resolvePaneDisplayTitle(claude, null, "semantic fallback", true)).toBe("Fixing the IME scroll lock");
-    expect(resolvePaneDisplayTitle(claude, "Live summary", "semantic fallback", true)).toBe("Live summary");
-    expect(resolvePaneDisplayTitle({ ...claude, agentSummaryTitle: "Provider summary" }, "Live summary", "semantic fallback", true))
+    expect(resolvePaneDisplayTitle(claude, null, "semantic fallback")).toBe("Fixing the IME scroll lock");
+    expect(resolvePaneDisplayTitle(claude, "Live summary", "semantic fallback")).toBe("Live summary");
+    expect(resolvePaneDisplayTitle({ ...claude, agentSummaryTitle: "Provider summary" }, "Live summary", "semantic fallback"))
       .toBe("Provider summary");
   });
 
   it("still refuses a Codex OSC title that is only the cwd basename", () => {
     const codex = { ...agentInfo, agentProfile: "codex-official" as const, title: "sync_party" };
-    expect(resolvePaneDisplayTitle(codex, null, null, true)).toBeNull();
-    expect(resolvePaneDisplayTitle({ ...codex, agentSummaryTitle: "Generated task title" }, null, null, true))
+    expect(resolvePaneDisplayTitle(codex, null, null)).toBeNull();
+    expect(resolvePaneDisplayTitle({ ...codex, agentSummaryTitle: "Generated task title" }, null, null))
       .toBe("Generated task title");
+  });
+
+  // Regression: claude-team panes emit only "◐ Claude Code" spinner frames plus
+  // one transient bare "claude" stamped by the npm launcher shim, and never a
+  // work summary. Both are placeholders, so the header and the top-bar tab used
+  // to read the literal word "claude" instead of falling through to a real
+  // summary source.
+  it("treats Claude's placeholder and shim titles as no summary for claude-team", () => {
+    const team = { ...agentInfo, agentProfile: "claude-team" as const, title: "claude" };
+    expect(resolveDisplayTitle(team, null)).toBeNull();
+    expect(resolveDisplayTitle(team, "claude")).toBeNull();
+    expect(resolveDisplayTitle(team, "◐ Claude Code")).toBeNull();
+    expect(resolveDisplayTitle(team, "⠧ Claude Code")).toBeNull();
+    // …and the semantic projection supplies the readable line instead.
+    expect(resolvePaneDisplayTitle(team, null, "修正 claude-team 表頭摘要"))
+      .toBe("修正 claude-team 表頭摘要");
+    // A real Claude OSC work summary still wins when one does arrive.
+    expect(resolveDisplayTitle(team, "Fixing the pane header summary")).toBe("Fixing the pane header summary");
   });
 });
 

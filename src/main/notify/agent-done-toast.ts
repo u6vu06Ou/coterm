@@ -44,7 +44,7 @@
 //   two-word body. No PTY output, no prompt, nothing that crossed the screen.
 
 import type { AppEventBus } from "../core/event-bus";
-import { shellTitle } from "@shared/terminal";
+import { isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
 import { isAttentionState, isAgentWorking } from "@shared/pty-state";
 import type { PtyState } from "@shared/schema";
 import type { PtyStateChanged, TerminalInfo } from "@shared/types";
@@ -220,11 +220,6 @@ function shellExecutableName(title: string | null | undefined): string | null {
   const leaf = trimmed.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
   if (!/\.exe$/i.test(leaf) && !/^(?:pwsh|powershell|cmd|bash|wsl)$/i.test(leaf)) return null;
   return leaf.replace(/\.exe$/i, "") || null;
-}
-
-/** A title equal to the shell default or the bare "Claude Code" is no summary. */
-function isPlaceholderSessionTitle(title: string | null | undefined): boolean {
-  return Boolean(title && /^[^\p{L}\p{N}]*Claude Code$/iu.test(title.trim()));
 }
 
 /**

@@ -102,6 +102,7 @@
       "terminal.handoff.export",
       "terminal.keepalive.decrease",
       "terminal.keepalive.increase",
+      "terminal.read-aloud.toggle",
       "terminal.reader.close",
       "terminal.reader.copy-all",
       "terminal.reader.copy-message",

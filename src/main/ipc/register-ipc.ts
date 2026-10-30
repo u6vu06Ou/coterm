@@ -379,6 +379,7 @@ export function registerIpc(dependencies: IpcDependencies): () => Promise<void> 
   handle(IPC.terminalPtyState, (terminalId: unknown) => operations.getPtyState(terminalId));
   handle(IPC.terminalKeepaliveSet, (input: unknown) => operations.setTerminalKeepalive(input));
   handle(IPC.terminalExportHandoff, (terminalId: unknown) => operations.exportTerminalHandoff(terminalId));
+  handle(IPC.terminalReadAloud, (terminalId: unknown) => operations.requestReadAloud(terminalId));
   handle(IPC.terminalKeepaliveList, () => operations.listTerminalKeepalives());
   handle(IPC.terminalLastCommand, (terminalId: unknown) => operations.getLastCommand(terminalId));
   handle(IPC.agentLauncherDir, () => getLauncherDir());

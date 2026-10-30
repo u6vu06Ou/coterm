@@ -58,6 +58,7 @@ import type {
   TerminalWorkspaceState,
   TerminalSessionInfo,
   TerminalTranscript,
+  ReadAloudResponse,
   TerminalWriteInput,
   WorkspaceEntry,
   WorkspaceListInput,
@@ -274,6 +275,7 @@ export const IPC = {
   terminalPtyState: "terminal:pty-state",
   terminalKeepaliveSet: "terminal:keepalive:set",
   terminalExportHandoff: "terminal:export-handoff",
+  terminalReadAloud: "terminal:read-aloud",
   terminalKeepaliveList: "terminal:keepalive:list",
   terminalDashboard: "terminal:dashboard",
   terminalLastCommand: "terminal:last-command",
@@ -503,6 +505,13 @@ export interface AiTerminalApi {
     approximate?: boolean;
     error?: string;
   }>;
+  /**
+   * Pane-header 朗讀: main summarises the agent's work since the user's last
+   * prompt via the local free-model proxy into a spoken-script, turns it into
+   * an mp3 with Edge TTS, and returns script + audio for the renderer to
+   * play (press again while playing = stop).
+   */
+  requestReadAloud(terminalId: string): Promise<ReadAloudResponse>;
   listTerminalKeepalives(): Promise<TerminalKeepaliveState[]>;
   getLastCommand(terminalId: string): Promise<CommandResult | null>;
   /** Directory holding generated per-profile launcher shims (#51), or null. */

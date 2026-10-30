@@ -42,6 +42,7 @@ const SLOW_RPC_METHODS = new Set([
   "createTerminal",
   "getTerminalWorkspace",
   "getTerminalTranscript",
+  "requestReadAloud",
 ]);
 
 async function rpc(fetcher: typeof globalThis.fetch, method: string, args: unknown[]) {

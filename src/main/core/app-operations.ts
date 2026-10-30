@@ -82,6 +82,8 @@ import { detectProviders } from "../providers/capability-detector";
 import type { Repository } from "../storage/repository";
 import type { PtyManager } from "../terminal/pty-manager";
 import { exportTerminalHandoff as exportTerminalHandoffCore } from "../terminal/handoff-exporter";
+import { prepareReadAloud, type ReadAloudResult } from "../voice/read-aloud";
+import { synthesizeSpeechMp3 } from "../voice/read-aloud-tts";
 import type { AppEventBus } from "./event-bus";
 import type { AttentionCenter } from "./attention-center";
 import { assertAllowedPath, assertExistingPath } from "../security/path-policy";
@@ -1381,6 +1383,81 @@ export class AppOperations {
         error: error instanceof Error ? error.message.slice(0, 200) : String(error),
       });
       return { ok: false as const, error: "export_failed" };
+    }
+  }
+  /**
+   * Pane-header 朗讀 (2026-10-30 maintainer): speak what the agent did since the
+   * user's last prompt. Source = the reader's transcript (follows /clear +
+   * live-session hops via the same resolver), fallback = PTY scrollback tail.
+   * Summary via the local free-model proxy; mp3 via Edge TTS in-process.
+   *
+   * Guardrails (council review 2026-10-30):
+   * - Agent panes only: a plain shell pane's scrollback can literally be
+   *   `env` output; the button press is the consent point and the renderer
+   *   draws the button on agent panes only, so the main gate matches it.
+   * - Overall deadline: if any stage (proxy / transcript / edge-tts socket)
+   *   wedges past its own timeout, the race below releases the pane lock so
+   *   it can never sit at "busy" forever.
+   * - Global concurrency cap: N panes pressing at once would otherwise fan
+   *   out N proxy calls + N TTS sockets.
+   * - Logs record failure NAMES only — messages can echo request bodies.
+   */
+  private readonly readAloudInFlight = new Set<string>();
+  private static readonly READ_ALOUD_GLOBAL_LIMIT = 2;
+  private static readonly READ_ALOUD_OVERALL_MS = 120_000;
+  async requestReadAloud(terminalId: unknown): Promise<ReadAloudResult> {
+    let id = "";
+    try {
+      id = idSchema.parse(terminalId);
+    } catch {
+      return { ok: false, error: "invalid_input" };
+    }
+    const terminal = this.dependencies.terminals.get(id);
+    if (!terminal) return { ok: false, error: "terminal_not_found" };
+    if (!terminal.agentProfile) return { ok: false, error: "not_agent_pane" };
+    if (this.readAloudInFlight.has(id)) return { ok: false, error: "busy" };
+    if (this.readAloudInFlight.size >= AppOperations.READ_ALOUD_GLOBAL_LIMIT) {
+      return { ok: false, error: "busy" };
+    }
+    this.readAloudInFlight.add(id);
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const pipeline = prepareReadAloud({
+        getMessages: async () => {
+          const transcript = await this.transcriptService.get({
+            terminalId: id,
+            cwd: terminal.cwd,
+            startedAt: terminal.startedAt,
+            nativeSessionId: terminal.nativeSessionId,
+            agentProfile: terminal.agentProfile,
+            reservedSessionIds: this.dependencies.terminals.dashboardSnapshot()
+              .map(({ info }) => info.id !== id ? info.nativeSessionId : null)
+              .filter((sessionId): sessionId is string => Boolean(sessionId)),
+            onRebind: (sessionId) => this.dependencies.terminals.setNativeSessionId(id, sessionId),
+          });
+          return transcript.messages.map((message) => ({ role: message.role, text: message.text }));
+        },
+        getScrollbackTail: (max) => this.dependencies.terminals.getScrollbackTail?.(id, max) ?? null,
+        synthesize: synthesizeSpeechMp3,
+      });
+      return await Promise.race([
+        pipeline,
+        new Promise<never>((_resolve, reject) => {
+          deadline = setTimeout(
+            () => reject(new Error(`read-aloud overall timeout (${AppOperations.READ_ALOUD_OVERALL_MS}ms)`)),
+            AppOperations.READ_ALOUD_OVERALL_MS,
+          );
+        }),
+      ]);
+    } catch (error) {
+      // Name only: an error message may echo a request body (proxy/TTS).
+      logger.warn("app", "read-aloud.failed", "Read-aloud failed before the pipeline could answer.", {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return { ok: false, error: "read_aloud_failed" };
+    } finally {
+      if (deadline) clearTimeout(deadline);
+      this.readAloudInFlight.delete(id);
     }
   }
   getAgentStateExplanation(terminalId: unknown) {

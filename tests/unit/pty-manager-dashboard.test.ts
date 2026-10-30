@@ -71,6 +71,24 @@ describe("applyTitleToInfo", () => {
     expect(applyTitleToInfo(baseInfo, "✳ Claude Code")).toBe(baseInfo);
   });
 
+  it("ignores the bare lowercase claude title stamped by the npm shim", () => {
+    // claude-team panes emit "◐ Claude Code" plus one transient "claude" from
+    // the launcher shim and nothing else — the header used to latch onto that
+    // word. Refusing it here keeps info.title on the shell default so the
+    // renderer falls through to its summary sources.
+    expect(applyTitleToInfo(baseInfo, "claude")).toBe(baseInfo);
+    expect(applyTitleToInfo(baseInfo, "✳ claude")).toBe(baseInfo);
+    expect(applyTitleToInfo(baseInfo, "claude.cmd")).toBe(baseInfo);
+  });
+
+  it("keeps a real summary that arrived before a late placeholder frame", () => {
+    // Order matters: once a real summary is stored, a later placeholder frame
+    // (Claude re-emits "◐ Claude Code" between turns) must not replace it.
+    const withSummary = applyTitleToInfo(baseInfo, "Fixing the pane header summary");
+    expect(applyTitleToInfo(withSummary, "◐ Claude Code").title).toBe("Fixing the pane header summary");
+    expect(applyTitleToInfo(withSummary, "claude").title).toBe("Fixing the pane header summary");
+  });
+
   it("updates title when title changes across turns", () => {
     const first = applyTitleToInfo(baseInfo, "Task A");
     const second = applyTitleToInfo(first, "Task B");

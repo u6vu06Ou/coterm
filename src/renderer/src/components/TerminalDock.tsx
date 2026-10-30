@@ -14,7 +14,10 @@ import {
   BookOpen,
   MoreHorizontal,
   Paperclip,
+  Volume2,
+  Square,
 } from "lucide-react";
+import { toggleReadAloud, useReadAloudStatus } from "./read-aloud-player";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Terminal, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -39,7 +42,7 @@ import { setInteractiveLauncherDir } from "./interactive-agent";
 import { READING_DRAG_MIME } from "./sidebar-sessions";
 import { buildAgentLaunchWriteInput } from "./launch-write";
 import { defaultActionForTerminalPath, findTerminalLinks, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, rowHardWrapsInto, type TerminalCellLike, type TerminalLogicalRow } from "./terminal-links";
-import { hardWrapAwareSelectionText } from "./terminal-copy";
+import { cellAccurateSelectionText } from "./terminal-copy";
 import { installLinkUnderlineOverlay, type LinkMarkSegment } from "./terminal-link-marks";
 import { calculateImeAnchor } from "./terminal-ime-position";
 import {
@@ -94,7 +97,7 @@ import { TerminalReaderOverlay } from "./terminal-reader/TerminalReaderOverlay";
 import { terminalReaderController } from "./terminal-reader/terminal-reader-state";
 import { TerminalHydrationCoordinator, type TerminalSnapshotInput } from "./terminal-hydration";
 import { classifySwipeAxis, SWIPE_AXIS_DECIDE_PX, consumeScrollDelta, installXtermMouseNaNGuard, planTouchWheelEvents, shouldOpenReaderOnSwipe, terminalCellHeight, touchMouseCell, xtermMouseReportingActive, xtermTriggerMouseEvent } from "./terminal-touch-scroll";
-import { resolvePaneDisplayTitle, resolveSemanticSessionSummary } from "./terminal-display-title";
+import { resolveDisplayTitle, resolveSemanticSessionSummary } from "./terminal-display-title";
 import {
   DEFAULT_READING_PRESET_ID,
   READING_PRESETS,
@@ -1396,7 +1399,11 @@ function XtermPane({
   // The shell default (e.g. "PowerShell") and the cwd basename (Codex writes
   // only its workspace folder into OSC 0) are filtered out so tiles show
   // nothing instead of a masquerading folder/shell name.
-  const displayTitle = resolvePaneDisplayTitle(info, sessionTitle, semanticSessionSummary, isActive);
+  // One resolve, two readers: `displayTitle` also feeds the tab/marquee event
+  // below, `hasNativeSummary` decides the poll cadence. Calling the resolver
+  // twice per render (once for each) is measurable at 12 mounted tiles.
+  const nativeSummaryTitle = resolveDisplayTitle(info, sessionTitle);
+  const displayTitle = nativeSummaryTitle ?? (info.isAgent ? semanticSessionSummary : null);
   const hostRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -1513,8 +1520,20 @@ function XtermPane({
     externalGeometryRef.current = { cols, rows };
   };
 
+  // True while the tile's native title already answers for the pane header.
+  // Stale semantic state is harmless while it is true: displayTitle prefers the
+  // native title, so a leftover projection value can never show through.
+  const hasNativeSummary = Boolean(nativeSummaryTitle);
   useEffect(() => {
-    if (!isActive || !info.isAgent) return;
+    // Poll for EVERY agent tile, not just the selected one: the projection is
+    // not only the header's fallback (claude-team has no native title at all,
+    // so its tab and its unselected header depend on it) — the marquee recap,
+    // narration and the voice layer read the same store, so dropping the poll
+    // whenever a native title exists would freeze them.
+    // Cost is contained by cadence instead: fast while the header actually
+    // needs the fallback, 4x slower once a provider title answers for the pane
+    // (the projection still has to stay warm for the other consumers).
+    if (!info.isAgent) return;
     let disposed = false;
     const refresh = (): void => {
       void window.aiTerminal.getAgentApiSemanticState(info.id)
@@ -1529,12 +1548,21 @@ function XtermPane({
         });
     };
     refresh();
-    const timer = window.setInterval(refresh, 3_000);
+    // Cadence by need, so 12 mounted tiles cannot fan out to 12 x 3s RPCs:
+    //   3s  — the header/tab has nothing else to show AND this is the selected
+    //         pane (the case the fallback exists for),
+    //   6s  — same, but a background tile (its top-bar tab still needs it),
+    //   12s — a provider title answers for the header; only the recap, narration
+    //         and voice consumers need the store kept warm.
+    // The interval is re-created whenever hasNativeSummary or active flips, and
+    // each flip refreshes immediately through refresh() above.
+    const intervalMs = hasNativeSummary ? 12_000 : isActive ? 3_000 : 6_000;
+    const timer = window.setInterval(refresh, intervalMs);
     return () => {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [info.id, info.isAgent, isActive]);
+  }, [info.id, info.isAgent, isActive, hasNativeSummary]);
   useEffect(() => {
     // `recap` drives the mobile PTY-switcher marquee; `summary` is the header
     // line and stays the fallback when no provider recap exists yet; `cwd`
@@ -2116,9 +2144,19 @@ function XtermPane({
       const pos = terminal.getSelectionPosition();
       if (!pos || !terminal.hasSelection()) return null;
       const buf = terminal.buffer.active;
-      const cursor = { x: buf.cursorX, y: buf.cursorY };
-      const top = Math.max(0, Math.min(pos.start.y, cursor.y) - 8);
-      const bottom = Math.min(buf.length - 1, Math.max(pos.end.y, cursor.y) + 2);
+      // Absolute buffer row, same space as getSelectionPosition(): cursorY is
+      // viewport-relative, so with any scrollback the raw value lands in the
+      // wrong space and the planner refused every selection.
+      const cursor = { x: buf.cursorX, y: buf.baseY + buf.cursorY };
+      // Cheap pre-check before any cell allocation: the input line is at the
+      // cursor, so a selection entirely far away from it (scrollback) is
+      // refused by the planner anyway — don't walk thousands of rows for it.
+      const WINDOW = 8;
+      const selTop = Math.min(pos.start.y, pos.end.y);
+      const selBottom = Math.max(pos.start.y, pos.end.y);
+      if (selBottom < cursor.y - WINDOW || selTop > cursor.y + WINDOW) return null;
+      const top = Math.max(0, selTop - WINDOW);
+      const bottom = Math.min(buf.length - 1, Math.max(selBottom, cursor.y) + 2);
       const rows: SelectionEditRow[] = [];
       const scratch = buf.getNullCell();
       for (let y = top; y <= bottom; y += 1) {
@@ -2144,7 +2182,7 @@ function XtermPane({
       if (clearNextDeleteRef.current) return false; // Ctrl+A bulk path owns the next delete.
       const editInput = readSelectionEditInput();
       if (!editInput) return false;
-      const plan = planSelectionEdit(editInput, key);
+      const plan = planSelectionEdit({ ...editInput, cols: terminal.cols }, key);
       if (!plan) return false;
       terminal.clearSelection();
       // Bypass rememberInput: the sequence's arrow escape bytes would
@@ -2196,7 +2234,7 @@ function XtermPane({
         // before PTY send), which the work order explicitly defers.
         selectAll: () => terminal.selectAll(),
         openSearch: () => openPaneSearchRef.current(),
-        getSelection: () => hardWrapAwareSelectionText(terminal),
+        getSelection: () => cellAccurateSelectionText(terminal),
         copyText: (text) => {
           void navigator.clipboard.writeText(text);
         },
@@ -3862,6 +3900,8 @@ function XtermPane({
   // may be ANOTHER window's session — disclose that in the done tooltip.
   const [handoffApproximate, setHandoffApproximate] = useState(false);
   const [refCopied, setRefCopied] = useState(false);
+  // 朗讀 button state for this pane (2026-10-30): idle / loading / playing.
+  const readAloudStatus = useReadAloudStatus(info.id);
   const exportHandoff = useCallback(async (): Promise<void> => {
     if (handoffState === "busy") return;
     setHandoffState("busy");
@@ -4109,6 +4149,43 @@ function XtermPane({
           <span className="xterm-id-label" title={t("dock.session.title", { id: info.id })}>
             #{info.id.slice(-6)}
           </span>
+        )}
+        {/* 朗讀 (2026-10-30 maintainer): one button per agent pane — desktop AND
+            phone (the phone shows only the selected pane, so this header is
+            where the driving user reaches it). Speaks what the agent did
+            since the user's last prompt; press again while playing = stop. */}
+        {info.isAgent && (
+          <button
+            data-action-id="terminal.read-aloud.toggle"
+            type="button"
+            className={`xterm-read-aloud${readAloudStatus === "playing" ? " is-playing" : ""}`}
+            aria-label={readAloudStatus === "playing" ? t("dock.readAloud.stop") : t("dock.readAloud.toggle")}
+            title={
+              readAloudStatus === "loading"
+                ? t("dock.readAloud.busy")
+                : readAloudStatus === "playing"
+                  ? t("dock.readAloud.stop")
+                  : t("dock.readAloud.toggle")
+            }
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              // Same focus-preservation dance as the eye toggle: the section's
+              // pointer handlers are swallowed by stopPropagation above, so
+              // select the tile explicitly before speaking.
+              onActivate(info.id);
+              void toggleReadAloud(info.id, displayTitle || "terminal");
+            }}
+          >
+            {readAloudStatus === "loading" ? (
+              <Loader2 size={17} className="is-spinning" />
+            ) : readAloudStatus === "playing" ? (
+              <Square size={14} />
+            ) : (
+              <Volume2 size={17} />
+            )}
+          </button>
         )}
         {!isMobileLayout && (
         <button

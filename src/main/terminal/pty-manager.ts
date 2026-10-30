@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AgentStateExplanation, CommandResult, TerminalCreateInput, TerminalInfo, TerminalLabel, PtyState, PtyStateSource, PtyStateChanged } from "@shared/types";
 import { agentStateExplanationSchema, commandResultSchema } from "@shared/schema";
 import type { ScrollbackMode } from "@shared/schema";
-import { shellTitle } from "@shared/terminal";
+import { isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
 import { canTransitionTo, isAttentionState, ptyStateSourceAuthority, toLegacyPtyState, type LegacyPtyState } from "@shared/pty-state";
 import type { AppEventBus } from "../core/event-bus";
 import { createId } from "../core/ids";
@@ -184,10 +184,12 @@ export function applyTitleToInfo(info: TerminalInfo, title: string): TerminalInf
   if (!trimmed) return info;
   if (trimmed === info.title) return info;
   if (trimmed === shellTitle(info.profile)) return info;
-  // Claude Code briefly advertises this as its terminal title before the
-  // actual task summary arrives. It is a provider marker, not the summary
-  // the PTY header is meant to show.
-  if (/^[^\p{L}\p{N}]*Claude Code$/iu.test(trimmed)) return info;
+  // Claude Code briefly advertises "◐ Claude Code" before the actual task
+  // summary arrives, and the npm `claude` shim stamps a bare "claude" as the
+  // window title on launch. Both are provider markers, not the summary the PTY
+  // header is meant to show — refusing them here keeps info.title honest so
+  // the renderer's fallback chain never settles on "claude".
+  if (isPlaceholderSessionTitle(trimmed)) return info;
   return { ...info, title: trimmed };
 }
 

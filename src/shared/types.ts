@@ -341,6 +341,27 @@ export type TerminalWorkspaceSaveInput = z.infer<typeof terminalWorkspaceSaveInp
 export type TerminalWorkspaceState = z.infer<typeof terminalWorkspaceStateSchema>;
 export type TranscriptProvider = "claude" | "codex" | "unsupported" | "unknown";
 export type TranscriptStatus = "ready" | "pending" | "empty" | "unsupported" | "not_found" | "ambiguous" | "error";
+/**
+ * 朗讀 button response (2026-10-30): the spoken script plus, when Edge TTS
+ * succeeded, the mp3 as base64 (same value for the desktop IPC and the phone
+ * /api/rpc path; the renderer plays it via a blob: URL in an <audio> element).
+ * `model` is the summariser used; "rule-fallback" = both free models were
+ * down and the script is a rule-cleaned tail of the conversation.
+ */
+export type ReadAloudResponse = {
+  ok: boolean;
+  script?: string;
+  model?: string;
+  source?: "transcript" | "scrollback";
+  audio?: {
+    mime: "audio/mpeg";
+    base64: string;
+    bytes: number;
+    voice: string;
+  };
+  error?: string;
+};
+
 export type TerminalTranscriptMessage = {
   /** Optional for backward-compatible handoff fixtures; service responses always set it. */
   id?: string;

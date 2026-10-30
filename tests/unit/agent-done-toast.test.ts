@@ -291,6 +291,15 @@ describe("agentToastTitle", () => {
     ).toBe("repo");
   });
 
+  // The npm `claude.cmd` shim stamps a bare "claude" window title on launch;
+  // claude-team panes never publish anything else, so the toast (like the
+  // header) used to read "claude · claude-1" instead of the folder.
+  it("skips the shim's bare lowercase claude title", () => {
+    expect(
+      agentToastTitle(titleInfo({ agentSummaryTitle: null, title: "claude", agentHandle: null })),
+    ).toBe("repo");
+  });
+
   it("plain shells always show the cwd basename", () => {
     expect(
       agentToastTitle(titleInfo({ isAgent: false, agentSummaryTitle: "x", agentHandle: null })),

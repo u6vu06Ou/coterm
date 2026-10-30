@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  joinHardWrappedSelection,
-  rowHardWrapsInto,
-  type SelectionRowSignals,
-  type TerminalCellLike,
-} from "../../src/renderer/src/components/terminal-links";
+import { rowHardWrapsInto, type TerminalCellLike } from "../../src/renderer/src/components/terminal-links";
 
 const COLS = 40;
 const cell = (chars: string, width: number): TerminalCellLike => ({ chars, width });
@@ -19,9 +14,6 @@ const padSpaces = (cells: TerminalCellLike[], count: number): TerminalCellLike[]
   count > 0 ? [...cells, ...Array.from({ length: count }, () => cell(" ", 1))] : cells;
 
 const widthOf = (cells: TerminalCellLike[]): number => cells.reduce((sum, c) => sum + c.width, 0);
-
-const rows = (...entries: Partial<SelectionRowSignals>[]): SelectionRowSignals[] =>
-  entries.map((e) => ({ softWrapsNext: false, hardWrapsNext: false, ...e }));
 
 describe("rowHardWrapsInto (TUI hard-wrap detection)", () => {
   it("joins a row whose content fills the last column", () => {
@@ -75,74 +67,3 @@ describe("rowHardWrapsInto (TUI hard-wrap detection)", () => {
   });
 });
 
-describe("joinHardWrappedSelection (copy across hard wraps)", () => {
-  it("joins a hard-wrapped path with a CJK prefix without newline or spaces", () => {
-    // The user repro: 網站新入口：D:\...\OBSE / RVATORY_20261022.html.
-    const first = "網站新入口：D:\\workspace\\trade\\MY_RESEARCH\\research\\strategy_observatory_20261021\\OBSE";
-    const second = "RVATORY_20261022.html";
-    const joined = joinHardWrappedSelection(
-      `${first}\r\n${second}`,
-      rows({ hardWrapsNext: true }, {}),
-    );
-    expect(joined).toBe(`${first}${second}`);
-  });
-
-  it("joins a hard-wrapped URL", () => {
-    const first = "report at https://example.com/reports/observatory/2026/october/week";
-    const second = "43/full.html — done";
-    const joined = joinHardWrappedSelection(`${first}\n${second}`, rows({ hardWrapsNext: true }, {}));
-    expect(joined).toBe(`${first}${second}`);
-  });
-
-  it("keeps the newline between two ordinary short lines", () => {
-    const joined = joinHardWrappedSelection("first line\nsecond line", rows({}, {}));
-    expect(joined).toBe("first line\nsecond line");
-  });
-
-  it("strips padding spaces at the wrap point and indent on the continuation", () => {
-    const joined = joinHardWrappedSelection(
-      "  D:\\proj\\out_very_long_name_part   \n    one.html",
-      rows({ hardWrapsNext: true }, {}),
-    );
-    expect(joined).toBe("  D:\\proj\\out_very_long_name_partone.html");
-  });
-
-  it("leaves non-joined chunks byte-identical, including trailing padding", () => {
-    // A following cleanTerminalCopy pass owns the trailing-space trim; the join
-    // helper must not pre-trim rows that keep their newline.
-    const joined = joinHardWrappedSelection("plain text   \nnext", rows({}, {}));
-    expect(joined).toBe("plain text   \nnext");
-  });
-
-  it("chains a three-row hard wrap", () => {
-    const joined = joinHardWrappedSelection(
-      "aaa\nbbb\nccc",
-      rows({ hardWrapsNext: true }, { hardWrapsNext: true }, {}),
-    );
-    expect(joined).toBe("aaabbbccc");
-  });
-
-  it("does not touch soft-wrapped rows (xterm already joined them)", () => {
-    // First row soft-wraps into the second: getSelection text has no newline
-    // between them; only the hard boundary before the third row is decided here.
-    const joined = joinHardWrappedSelection(
-      "softpartonesoftpartwo\nlast",
-      rows({ softWrapsNext: true, hardWrapsNext: true }, { hardWrapsNext: false }, {}),
-    );
-    expect(joined).toBe("softpartonesoftpartwo\nlast");
-  });
-
-  it("returns null when chunk and row bookkeeping disagree (caller falls back)", () => {
-    // Column-mode selections emit one chunk per row even across wraps.
-    expect(joinHardWrappedSelection("a\nb", rows({ softWrapsNext: true }, {}))).toBeNull();
-    expect(joinHardWrappedSelection("a\nb\nc", rows({}, {}))).toBeNull();
-  });
-
-  it("joins over NBSP padding left by the NBSP-to-space post-trim conversion", () => {
-    const joined = joinHardWrappedSelection(
-      "D:\\long\\path_segment \nnext_part.html",
-      rows({ hardWrapsNext: true }, {}),
-    );
-    expect(joined).toBe("D:\\long\\path_segmentnext_part.html");
-  });
-});

@@ -27,14 +27,18 @@
 //   that gap exists only in cell space and must not count as a character.
 // - Trailing untouched cells on the group's last row are padding, not input.
 //
-// Scope/safety gates: in the alternate screen (fullscreen Claude Code / Codex)
-// only a selection on the caret's own row — those TUIs park the real cursor on
-// their input caret but wrap long input themselves; in the NORMAL buffer only selections fully inside the logical line group containing
-// the live cursor (scrollback selections refuse the translation — the caller
-// then only clears the highlight and sends NOTHING to the PTY), and a total
-// keystroke budget of MAX_EDIT_CHARS. Hard-newline multi-line input
-// (Shift+Enter) is NOT one wrapped group, so cross-line selections there
-// fall back to clear-only — documented, never wrong-deleting.
+// Scope/safety gates: the editable input line is the logical line holding the
+// live cursor — soft-wrapped (isWrapped) rows in the NORMAL buffer, where
+// inline Claude Code / Codex actually run, and (in the alternate screen) rows
+// joined by the TUI's own hard-wrap signal, since fullscreen TUIs wrap their
+// input themselves. A selection reaching outside that line refuses the
+// translation — the caller then only clears the highlight and sends NOTHING to
+// the PTY — as does a group whose top continues above the given window, and a
+// total keystroke budget of MAX_EDIT_CHARS. Hard-newline multi-line input
+// (Shift+Enter) is NOT one wrapped group, so cross-line selections there fall
+// back to clear-only — documented, never wrong-deleting.
+
+import { rowHardWrapsInto } from "./terminal-links";
 
 export interface SelectionCellLike {
   /** IBufferCell.getChars(); "" for an untouched or wide-tail cell. */
@@ -65,6 +69,8 @@ export interface SelectionEditInput {
   cursor: SelectionCellPoint;
   /** Selection range in buffer order; end.x is EXCLUSIVE. */
   selection: { start: SelectionCellPoint; end: SelectionCellPoint };
+  /** Terminal columns; enables the TUI hard-wrap join in the alternate screen. */
+  cols?: number;
   /** True while the terminal sits in the alternate screen. */
   altScreen: boolean;
 }
@@ -168,24 +174,47 @@ export function planSelectionEdit(input: SelectionEditInput, key: SelectionEditK
 
   const cy = cursor.y - baseY;
   if (cy < 0 || cy >= rows.length) return null;
-  let gStart = cy;
-  let gEnd = cy;
-  if (input.altScreen) {
-    // Fullscreen agent TUIs (Claude Code, Codex) park the real cursor on their
-    // input caret but wrap long input themselves — no isWrapped rows, plus
-    // prompt/indent cells on every row. Only the caret's own row maps cleanly
-    // to characters, so a selection on that row is translated; anything that
-    // crosses rows stays clear-only.
-    if (selection.start.y !== cursor.y || selection.end.y !== cursor.y) return null;
-  } else {
-    // Wrapped group containing the live cursor = the editable input line.
-    while (gStart > 0 && rows[gStart]!.isWrapped) gStart -= 1;
-    if (rows[gStart]!.isWrapped) return null; // group starts above the given window
-    while (gEnd + 1 < rows.length && rows[gEnd + 1]!.isWrapped) gEnd += 1;
-  }
-
   const selStartRow = selection.start.y - baseY;
   const selEndRow = selection.end.y - baseY;
+  if (selStartRow < 0 || selEndRow >= rows.length) return null;
+  // The editable input line = the logical line containing the live CLI cursor.
+  // It applies in BOTH buffers: Claude Code and Codex usually run INLINE (normal
+  // buffer) and let the terminal soft-wrap their input, so an alt-screen-only
+  // rule never fired there. Containment is what keeps this safe — a selection
+  // reaching outside the cursor's own input line still falls back to clear-only.
+  let gStart = cy;
+  let gEnd = cy;
+  while (gStart > 0 && rows[gStart]!.isWrapped) gStart -= 1;
+  // Only a group whose TOP is cut off by the window is unusable; the walk still
+  // reaches the true start of every group the window holds in full.
+  if (gStart === 0 && rows[0]!.isWrapped) return null;
+  while (gEnd + 1 < rows.length && rows[gEnd + 1]!.isWrapped) gEnd += 1;
+  if (input.altScreen) {
+    // A fullscreen TUI wraps its input ITSELF (hard wrap — isWrapped stays
+    // false) and parks its caret on the input, with status/box rows right next
+    // to it. So the group is also grown over the rows the selection actually
+    // reaches, and only while the hard-wrap heuristic still holds; the group
+    // never grows past the selection, so the offsets stay anchored on it.
+    const cols = input.cols;
+    if (cols !== undefined) {
+      while (
+        gStart > selStartRow &&
+        gStart > 0 &&
+        rowHardWrapsInto(rows[gStart - 1]!.cells, rows[gStart]!.cells, cols)
+      ) {
+        gStart -= 1;
+      }
+      while (
+        gEnd < selEndRow &&
+        gEnd + 1 < rows.length &&
+        rowHardWrapsInto(rows[gEnd]!.cells, rows[gEnd + 1]!.cells, cols)
+      ) {
+        gEnd += 1;
+      }
+    }
+    // No wrap signal at all: the caret row alone stays the input line.
+  }
+
   if (selStartRow < gStart || selEndRow > gEnd) return null;
 
   const flat = flattenGroup(rows, gStart, gEnd);

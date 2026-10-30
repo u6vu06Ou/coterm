@@ -553,6 +553,13 @@ export function multiRowLinkRangeForMatch(
 // char is likewise decorative. Trailing whitespace padding a TUI painted to
 // clear the row never counts as content — a padded short row ends short.
 
+// ---------------------------------------------------------------------------
+// Hard-wrap detection (shared by copy and link scanning).
+//
+// (The copy path used to post-process getSelection() text with this signal; it
+// now rebuilds the text from cells in terminal-copy.ts, but the signal itself
+// still drives the link scanner and the alt-screen input-line check.)
+
 // ─-╿ Box Drawing + ▀-▟ Block Elements: the character sets TUIs draw
 // boxes/bars with. Literal ranges match this file's existing CJK-range style.
 const BOX_EDGE_RE = /[─-╿▀-▟]/;
@@ -580,54 +587,6 @@ export function rowHardWrapsInto(
   if (nextFirst.length === 0) return false;
   if (BOX_EDGE_RE.test(nextFirst[0]!)) return false;
   return true;
-}
-
-// ---------------------------------------------------------------------------
-// Copy text across hard wraps.
-//
-// xterm.getSelection() joins rows with "\r\n" on Windows, merging ONLY soft-
-// wrapped (isWrapped) runs, so a TUI hard wrap lands in the clipboard as a real
-// newline (plus any padding spaces that survived trimming). The caller hands
-// the raw selection text plus one signal pair per SELECTED buffer row; rows
-// whose join signal is set are re-joined WITHOUT the newline, with the wrap
-// point stripped of padding (row's trailing whitespace) and the continuation
-// row's leading indent. Boundaries xterm already joined (soft wraps) keep
-// exactly the bytes getSelection produced — no double-trim, no reorder.
-// Returns null when the chunk/row bookkeeping disagrees (e.g. column-mode
-// selections slice wrapped rows apart); callers fall back to the legacy text.
-
-export interface SelectionRowSignals {
-  /** Next selected buffer row is isWrapped (xterm already joined it in). */
-  softWrapsNext: boolean;
-  /** rowHardWrapsInto(this row, next row) — join without a newline. */
-  hardWrapsNext: boolean;
-}
-
-export function joinHardWrappedSelection(
-  text: string,
-  rows: readonly SelectionRowSignals[],
-): string | null {
-  if (rows.length < 2) return text;
-  const chunks = text.split(/\r?\n/);
-  let expected = 1;
-  for (let k = 0; k < rows.length - 1; k += 1) {
-    if (!rows[k]!.softWrapsNext) expected += 1;
-  }
-  if (chunks.length !== expected) return null;
-  let out = chunks[0] ?? "";
-  let ci = 0;
-  for (let k = 0; k < rows.length - 1; k += 1) {
-    const row = rows[k]!;
-    if (row.softWrapsNext) continue;
-    ci += 1;
-    const next = chunks[ci] ?? "";
-    if (row.hardWrapsNext) {
-      out = out.replace(/[ \t\u00a0]+$/u, "") + next.replace(/^[ \t\u00a0]+/u, "");
-    } else {
-      out += "\n" + next;
-    }
-  }
-  return out;
 }
 
 // ---------------------------------------------------------------------------

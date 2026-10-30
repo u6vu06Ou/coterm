@@ -21,7 +21,7 @@ export const rpcMethods = [
   "sendMessage", "cancelMessage", "runTerminalCommand", "resolveApproval", "resolveUserInput",
   "startCouncil", "cancelCouncil", "refreshProviders",
   "createTerminal", "writeTerminal", "resizeTerminal", "requestTerminalGeometry", "renameTerminal", "setTerminalLabel", "markTerminalAgent", "markTerminalAgentOwned", "setTerminalNativeSessionId", "getPtyState", "setTerminalKeepalive", "listTerminalKeepalives", "getAgentStateExplanation", "getLastCommand", "getTerminalDashboard",
-  "killTerminal", "listTerminals", "getTerminalWorkspace", "saveTerminalWorkspace", "getTerminalTranscript",
+  "killTerminal", "listTerminals", "getTerminalWorkspace", "saveTerminalWorkspace", "getTerminalTranscript", "requestReadAloud",
   "getDockLayout", "openTile", "closeTile", "selectTile", "setDockLayout", "setExclusive",
   "listAttention", "resolveAttention", "getUsageSnapshot", "getSystemActivity", "getAgentFileActivity", "getWorktreeRegistry",
   // Phone/web +agent needs the shim dir too; without it the renderer falls back
@@ -123,6 +123,7 @@ export function bindWebOperations(
     listTerminals: (id) => operations.listTerminals(id),
     getTerminalWorkspace: (id) => operations.getTerminalWorkspace(id),
     getTerminalTranscript: (id) => operations.getTerminalTranscript(id),
+    requestReadAloud: (id) => operations.requestReadAloud(id),
     saveTerminalWorkspace: (input) => operations.saveTerminalWorkspace(input),
     getDockLayout: () => operations.getDockLayout(),
     openTile: (input) => operations.openTile(input),

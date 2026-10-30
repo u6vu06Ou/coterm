@@ -243,6 +243,7 @@ const api: AiTerminalApi = {
   getPtyState: (terminalId: string) => ipcRenderer.invoke(IPC.terminalPtyState, terminalId),
   setTerminalKeepalive: (input: TerminalKeepaliveSetInput) => ipcRenderer.invoke(IPC.terminalKeepaliveSet, input),
   exportTerminalHandoff: (terminalId: string) => ipcRenderer.invoke(IPC.terminalExportHandoff, terminalId),
+  requestReadAloud: (terminalId: string) => ipcRenderer.invoke(IPC.terminalReadAloud, terminalId),
   listTerminalKeepalives: () => ipcRenderer.invoke(IPC.terminalKeepaliveList),
   getLastCommand: (terminalId: string) => ipcRenderer.invoke(IPC.terminalLastCommand, terminalId),
   getAgentLauncherDir: () => ipcRenderer.invoke(IPC.agentLauncherDir) as Promise<string | null>,
