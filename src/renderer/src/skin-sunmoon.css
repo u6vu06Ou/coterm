@@ -703,13 +703,13 @@
   background: linear-gradient(180deg, var(--sm-card-head), color-mix(in srgb, var(--sm-card-head) 40%, var(--sm-card)));
   color: var(--text);
   font-family: var(--sm-ui);
-  font-size: 12px;
+  font-size: var(--pane-header-font-size, 12px);
   font-weight: 500;
 }
 :root[data-skin="sunmoon"] .xterm-pane-frame > header .xterm-agent-label {
   color: var(--text-soft);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--pane-header-font-size, 12.5px);
 }
 :root[data-skin="sunmoon"] .xterm-pane-frame.active > header .xterm-agent-label {
   color: var(--text);
@@ -727,7 +727,7 @@
   border-radius: 99px;
   background: var(--sm-seg);
   font-weight: 600;
-  font-size: 11.5px;
+  font-size: var(--pane-header-model-size, 11.5px);
 }
 :root[data-skin="sunmoon"] .xterm-pane-frame > header .xterm-id-label {
   font-family: var(--sm-mono);
@@ -958,7 +958,7 @@
     white-space: nowrap;
     text-align: center;
     line-height: 20px;
-    font-size: clamp(12.5px, 0.6rem + 0.45cqi, 15px);
+    font-size: var(--pane-header-font-size, clamp(12.5px, 0.6rem + 0.45cqi, 15px));
     font-weight: 650;
     color: var(--session-summary);
     opacity: .82;

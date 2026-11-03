@@ -1,6 +1,6 @@
 {
   "name": "coterm",
-  "version": "1.5.75",
+  "version": "1.5.77",
   "description": "Coterm is a Windows-first workspace for coding agents, conversations, and terminal panes.",
   "main": "out/main/index.js",
   "author": "Coterm contributors",
@@ -127,6 +127,10 @@
       "node_modules/@livekit/**"
     ],
     "extraResources": [
+      {
+        "from": "resources/voltdir",
+        "to": "voltdir"
+      },
       {
         "from": "node_modules/smol-toml/dist/index.cjs",
         "to": "codex-team/smol-toml.cjs"

@@ -138,6 +138,13 @@ describe("selectionTextFromRows — wraps", () => {
 });
 
 describe("selectionTextFromRows — wide CJK chars", () => {
+  it("omits the unwritten last column when a wide glyph wraps to the next row", () => {
+    expect(selectionTextFromRows([
+      row([...narrow("abc"), ...blank(1)], { soft: true }),
+      row(wide("中")),
+    ])).toBe("abc中");
+  });
+
   it("emits a wide char once and its invisible tail as nothing", () => {
     const cells = [...wide("入"), ...wide("口"), ...wide("："), ...narrow("D:\\x"), ...spaces(4)];
     expect(selectionTextFromRows([row(cells)])).toBe("入口：D:\\x");

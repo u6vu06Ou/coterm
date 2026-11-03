@@ -258,6 +258,7 @@ const rateLimitExemptMethods = new Set([
   "getUsageSnapshot",
   "getSystemActivity",
   "getAgentFileActivity",
+  "getDiskOverview",
   "getWorktreeRegistry",
   "listWorkspace",
   "listEvents",

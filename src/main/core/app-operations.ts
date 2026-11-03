@@ -99,6 +99,8 @@ import type { TerminalDashboardEntry, UiActionRecordInput } from "@shared/ipc";
 import { TerminalTranscriptService, providerFor } from "../terminal/transcript-service";
 import type { UsageMonitor } from "../terminal/usage-monitor";
 import type { ActivityMonitor } from "../terminal/activity-monitor";
+import { DiskOverview } from "../terminal/disk-overview";
+import { z } from "zod";
 import type { BrowserRuntimeManager } from "../browser/browser-runtime-manager";
 import { dispatchBrowserAction } from "../browser/browser-action-registry";
 import { buildWorktreeResumeCommand } from "../providers/agent-launch";
@@ -1934,6 +1936,15 @@ export class AppOperations {
   getSystemActivity(): SystemActivity {
     return this.dependencies.activity?.getSnapshot()
       ?? { cpuPercent: null, memPercent: 0, memUsedBytes: 0, memTotalBytes: 0, agentFiles: 0, agentBytes: 0, watchedRoots: 0, since: 0 };
+  }
+
+  private readonly diskOverview = new DiskOverview();
+
+  async getDiskOverview(input: unknown) {
+    const { projectId } = z.object({ projectId: z.string().min(1) }).parse(input);
+    const project = this.dependencies.repository.getProject(projectId);
+    if (!project) throw new Error("專案不存在。");
+    return this.diskOverview.get(project.workspacePath);
   }
 
   /** Click-to-expand file list under the pulse (2026-10-06). Validation is here — counts, never paths logged. */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Check as CheckIcon, Copy as CopyIcon, Search as SearchIcon, X as XIcon } from "lucide-react";
 import type { PtyState, TerminalTranscript, TerminalTranscriptMessage } from "@shared/types";
 import { useI18n } from "../../i18n";
@@ -10,6 +10,7 @@ import { activeTurnTick, layoutTurnTicks, ticksEqual, TURN_RAIL_MIN_GAP, TURN_RA
 import type { TurnTick, TurnTickInput } from "./terminal-reader-turns";
 import { ConversationReader } from "./ConversationReader";
 import { buildCopyAllText, keepFinalTurnOutputs, pinchReaderFontSize, terminalReaderController } from "./terminal-reader-state";
+import { captureReaderViewportAnchor, restoreReaderViewportScrollTop, type ReaderViewportAnchor } from "./terminal-reader-viewport";
 import { mergeTranscriptMessages } from "./terminal-reader-merge";
 import { copyTextToClipboard } from "./clipboard";
 import { mobileInputController } from "../mobile/mobile-input-controller";
@@ -65,12 +66,15 @@ export function TerminalReaderOverlay({
   // and the per-turn quick-jump rail.
   const [nearBottom, setNearBottom] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
-  const previousContentRef = useRef("");
+  const previousContentRef = useRef<TerminalTranscriptMessage[] | null>(null);
   const [doneFlash, setDoneFlash] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [turnTicks, setTurnTicks] = useState<TurnTick[]>([]);
   const [activeTick, setActiveTick] = useState(-1);
   const stickToBottomRef = useRef(true);
+  const viewAnchorRef = useRef<ReaderViewportAnchor | null>(null);
+  const pinchActiveRef = useRef(false);
+  const textAnchorRef = useRef<{ node: Text; offset: number; viewportY: number } | null>(null);
   const turnTicksRef = useRef<TurnTick[]>([]);
   const toneRef = useRef(tone);
   const runStartRef = useRef<number | null>(null);
@@ -205,11 +209,10 @@ export function TerminalReaderOverlay({
     [messages, status],
   );
   useEffect(() => {
-    const content = JSON.stringify(shownMessages ?? []);
-    if (previousContentRef.current && previousContentRef.current !== content && !stickToBottomRef.current) {
+    if (previousContentRef.current !== null && previousContentRef.current !== shownMessages && !stickToBottomRef.current) {
       queueMicrotask(() => setHasNewMessages(true));
     }
-    previousContentRef.current = content;
+    previousContentRef.current = shownMessages;
   }, [shownMessages]);
   const handleCopyAll = useCallback((): void => {
     const text = shownMessages ? buildCopyAllText(shownMessages) : rawText;
@@ -379,7 +382,10 @@ export function TerminalReaderOverlay({
     // the follow effect below lands at the bottom and the scroll listener then
     // records near-bottom on its behalf.
     stickToBottomRef.current = true;
-    previousContentRef.current = "";
+    viewAnchorRef.current = null;
+    textAnchorRef.current = null;
+    pinchActiveRef.current = false;
+    previousContentRef.current = null;
     queueMicrotask(() => setHasNewMessages(false));
   }, [reader.open, terminalId]);
 
@@ -395,6 +401,57 @@ export function TerminalReaderOverlay({
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [active, messages, rawText, reader.fontSize, reader.open, status, pasted]);
 
+  const restoreReaderViewport = useCallback((): void => {
+    const anchor = viewAnchorRef.current;
+    const rootEl = searchOverlayRef.current;
+    if (!anchor || !rootEl) return;
+    const scroller = rootEl.querySelector<HTMLElement>(".terminal-reader-scroll");
+    if (!scroller) return;
+    const maxScroll = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const textAnchor = textAnchorRef.current;
+    if (textAnchor && scroller.contains(textAnchor.node)) {
+      const range = document.createRange();
+      const offset = Math.min(textAnchor.offset, Math.max(0, textAnchor.node.length - 1));
+      range.setStart(textAnchor.node, offset);
+      range.setEnd(textAnchor.node, Math.min(textAnchor.node.length, offset + 1));
+      const rect = range.getBoundingClientRect();
+      if (rect.height > 0) {
+        const targetY = scroller.getBoundingClientRect().top + textAnchor.viewportY;
+        scroller.scrollTop = Math.max(0, Math.min(maxScroll, scroller.scrollTop + rect.top - targetY));
+        return;
+      }
+    }
+    const fallbackScroll = anchor.fallbackScrollFraction * maxScroll;
+    if (anchor.messageIndex < 0) {
+      scroller.scrollTop = fallbackScroll;
+      return;
+    }
+    const message = scroller.querySelector<HTMLElement>(`.terminal-reader-message[data-message-index="${anchor.messageIndex}"]`);
+    if (!message) {
+      scroller.scrollTop = fallbackScroll;
+      return;
+    }
+    const scrollerRect = scroller.getBoundingClientRect();
+    const messageRect = message.getBoundingClientRect();
+    scroller.scrollTop = restoreReaderViewportScrollTop({
+      anchorTop: messageRect.top,
+      messageHeight: messageRect.height,
+      localRatio: anchor.localRatio,
+      containerTop: scrollerRect.top,
+      containerHeight: scrollerRect.height,
+      maxScroll,
+      currentScrollTop: scroller.scrollTop,
+      viewportAnchorRatio: anchor.viewportAnchorRatio,
+    });
+  }, []);
+
+  // Pinch reflows text; restore the non-bottom message anchor once the new
+  // geometry is committed. Bottom-following is handled by the auto-stick rule.
+  useLayoutEffect(() => {
+    if (!reader.open || !active) return;
+    restoreReaderViewport();
+  }, [active, reader.fontSize, reader.open, restoreReaderViewport]);
+
   // Near-bottom tracking + turn-rail active tick. Scroll doesn't bubble, so
   // listen at window capture and filter by the reader's scroll container.
   useEffect(() => {
@@ -407,6 +464,11 @@ export function TerminalReaderOverlay({
       if (!cls.includes("terminal-reader-scroll")) return;
       const distance = target.scrollHeight - target.scrollTop - target.clientHeight;
       const close = distance <= 80;
+      // Reflow generates scroll events too. They must not replace the anchor
+      // or change bottom-following halfway through the same two-finger gesture.
+      if (pinchActiveRef.current) return;
+      viewAnchorRef.current = null;
+      textAnchorRef.current = null;
       stickToBottomRef.current = close;
       setNearBottom(close);
       if (close) setHasNewMessages(false);
@@ -428,15 +490,19 @@ export function TerminalReaderOverlay({
   useEffect(() => {
     if (!reader.open || !active) return;
     let alive = true;
+    let polling = false;
     const timer = window.setInterval(() => {
-      refresh();
+      // A slow connection must not stack full transcript requests. Hidden
+      // readers resume at the next tick instead of parsing while unattended.
+      if (document.hidden || polling) return;
+      polling = true;
       void window.aiTerminal.getTerminalTranscript(terminalId).then((result: TerminalTranscript) => {
         if (!alive) return;
         setMessages((previous) => mergeTranscriptMessages(previous, result.messages));
         setStatus(result.status === "ready" || result.status === "empty" ? result.status : (result.status ?? "empty"));
       }).catch(() => {
         // Background refresh failure: keep the old content on screen.
-      });
+      }).finally(() => { polling = false; });
     }, tone === "working" ? 2000 : 5000);
     return () => {
       alive = false;
@@ -572,6 +638,7 @@ export function TerminalReaderOverlay({
     scroller.scrollTo({ top: Math.min(top, maxScroll), behavior: "smooth" });
   }, []);
 
+
   useEffect(() => {
     if (!reader.open || !active) return;
     let cancelled = false;
@@ -604,7 +671,40 @@ export function TerminalReaderOverlay({
       return a && b ? Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) : 0;
     };
     const onStart = (event: TouchEvent): void => {
-      if (event.touches.length === 2) start = { distance: spread(event.touches), font: terminalReaderController.get(terminalId).fontSize };
+      if (event.touches.length !== 2) return;
+      pinchActiveRef.current = true;
+      textAnchorRef.current = null;
+      viewAnchorRef.current = null;
+      const scroller = root.querySelector<HTMLElement>(".terminal-reader-scroll");
+      if (scroller && !stickToBottomRef.current) {
+        const scrollerRect = scroller.getBoundingClientRect();
+        const messages = [...scroller.querySelectorAll<HTMLElement>(".terminal-reader-message")];
+        viewAnchorRef.current = captureReaderViewportAnchor({
+          messageTops: messages.map((message) => message.getBoundingClientRect().top),
+          messageHeights: messages.map((message) => message.getBoundingClientRect().height),
+          containerTop: scrollerRect.top,
+          containerHeight: scrollerRect.height,
+          scrollTop: scroller.scrollTop,
+          maxScroll: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
+        });
+        // Preserve a concrete character under the middle of the viewport.
+        // Unlike message-height ratios, this survives wrapping mixed headings,
+        // code blocks and paragraphs at a different font size.
+        const pointX = scrollerRect.left + scrollerRect.width / 2;
+        const pointY = scrollerRect.top + scrollerRect.height / 2;
+        const doc = document as Document & { caretRangeFromPoint?: (x: number, y: number) => Range | null };
+        const range = doc.caretRangeFromPoint?.(pointX, pointY);
+        if (range?.startContainer.nodeType === Node.TEXT_NODE && scroller.contains(range.startContainer)) {
+          const node = range.startContainer as Text;
+          const offset = Math.min(range.startOffset, Math.max(0, node.length - 1));
+          const marker = document.createRange();
+          marker.setStart(node, offset);
+          marker.setEnd(node, Math.min(node.length, offset + 1));
+          const rect = marker.getBoundingClientRect();
+          if (rect.height > 0) textAnchorRef.current = { node, offset, viewportY: rect.top - scrollerRect.top };
+        }
+      }
+      start = { distance: spread(event.touches), font: terminalReaderController.get(terminalId).fontSize };
     };
     const onMove = (event: TouchEvent): void => {
       if (!start || event.touches.length !== 2) return;
@@ -612,13 +712,17 @@ export function TerminalReaderOverlay({
       terminalReaderController.setFont(terminalId, pinchReaderFontSize(start.font, start.distance, spread(event.touches)));
     };
     const onEnd = (event: TouchEvent): void => {
-      if (event.touches.length < 2) start = null;
+      if (event.touches.length < 2) {
+        start = null;
+        pinchActiveRef.current = false;
+      }
     };
     root.addEventListener("touchstart", onStart, { passive: true });
     root.addEventListener("touchmove", onMove, { passive: false });
     root.addEventListener("touchend", onEnd, { passive: true });
     root.addEventListener("touchcancel", onEnd, { passive: true });
     return () => {
+      pinchActiveRef.current = false;
       root.removeEventListener("touchstart", onStart);
       root.removeEventListener("touchmove", onMove);
       root.removeEventListener("touchend", onEnd);

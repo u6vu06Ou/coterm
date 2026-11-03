@@ -155,6 +155,28 @@ rate-limited — check it before fanning out several sub-agents.
 The same snapshot is available to MCP-native clients as the `coterm_resources`
 tool on `POST /api/v1/agent/mcp`.
 
+#### `GET /api/v1/agent/files?limit=100`
+
+Returns `{ ok: true, activity: { files, total } }`, the same current-session
+file activity shown in the sidebar. Entries include absolute `path`, `size`,
+`baselineSize`, `mtimeMs`, and `kind`. Results are sorted largest first and
+capped at 500. This reads the existing bounded activity index, without scanning
+the workspace. The normal localhost and bearer-token checks apply.
+
+#### `GET /api/v1/agent/disk-overview?projectId=...`
+
+Returns `{ ok: true, report }` with VoltDir folder totals and the 20 largest
+files/directories. Paths inside `top_files` and `top_dirs` are relative to
+`report.root`; `scannedAt` records freshness and `partial` flags incomplete
+coverage. This measures the whole selected project, rather than session output.
+
+Scanning is explicit, metadata-only, and restricted to a registered project's
+workspace. One scan runs at a time, with one thread, a 25-second scan budget,
+a 30-second process deadline, and a 60-second result cache. Package and Git
+internals are excluded; links are not followed. Missing `projectId` returns
+400; an unavailable scanner or busy scan returns 503. The sidebar uses the
+same service. Nothing is deleted or uploaded.
+
 #### `GET /api/v1/agent/session/:terminalId`
 
 Terminal detail + scrollback for one terminal. Always HTTP 200 with a **bounded**

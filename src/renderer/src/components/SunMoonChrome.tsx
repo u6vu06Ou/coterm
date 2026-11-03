@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentFileActivity, SystemActivity, WorktreeRegistryActivity } from "@shared/types";
+import type { AgentFileActivity, SystemActivity, WorktreeRegistryActivity, DiskOverviewReport } from "@shared/types";
 import { FolderOpen } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { useI18n } from "../i18n";
@@ -94,6 +94,9 @@ export function SunMoonPulse() {
   const [ram, setRam] = useState<number[]>([]);
   const [filesOpen, setFilesOpen] = useState(false);
   const [fileActivity, setFileActivity] = useState<AgentFileActivity | null>(null);
+  const [diskReport, setDiskReport] = useState<DiskOverviewReport | null>(null);
+  const [diskBusy, setDiskBusy] = useState(false);
+  const [diskError, setDiskError] = useState("");
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [worktrees, setWorktrees] = useState<WorktreeRegistryActivity | null>(null);
   const [copiedWorktreeId, setCopiedWorktreeId] = useState<number | null>(null);
@@ -243,6 +246,34 @@ export function SunMoonPulse() {
       {filesOpen && (
         <div className="sm-pulse-files">
           <p className="sm-pulse-files-note">{t("skin.pulse.list.note")}</p>
+          <button type="button" className="secondary-button" data-action-id="sidebar.pulse.disk.scan"
+            disabled={diskBusy || !revealProjectId} onClick={() => {
+              if (!revealProjectId || diskBusy) return;
+              setDiskBusy(true);
+              setDiskError("");
+              setDiskReport(null);
+              void window.aiTerminal.getDiskOverview({ projectId: revealProjectId })
+                .then(setDiskReport).catch(() => setDiskError("盤點未完成，請稍後再試。"))
+                .finally(() => setDiskBusy(false));
+            }}>
+            {diskBusy ? "盤點中…" : "盤點目前專案空間"}
+          </button>
+          {diskError && <p role="status">{diskError}</p>}
+          {diskReport && <div aria-live="polite">
+            <p title={diskReport.root}>{diskReport.root}</p>
+            <p>資料夾盤點：{diskReport.totals.files.toLocaleString()} 個檔案 · {formatBytes(diskReport.totals.logical)}
+              {diskReport.partial ? "（部分位置無法讀取）" : ""}</p>
+            <p>略過套件與 Git 內部資料；以下為體積最大的檔案，可點選複製路徑。</p>
+            <ul className="sm-pulse-files-list">{diskReport.top_files.items.map((file, index) => {
+              const path = /^[A-Za-z]:[\\/]|^\\\\/.test(file.path) ? file.path : `${diskReport.root.replace(/[\\/]+$/, "")}\\${file.path}`;
+              return <li key={file.path}><button type="button" className="sm-pulse-file"
+                data-action-id={`sidebar.pulse.disk.file:${index}`} title={path}
+                onClick={() => { void copyTextToClipboard(path); }}>
+                <span className="sm-pulse-file-name">{file.path}</span>
+                <span className="sm-pulse-file-meta">{formatBytes(file.logical)}</span>
+              </button></li>;
+            })}</ul>
+          </div>}
           <div className="sm-pulse-controls">
             <div className="sm-pulse-segment" role="group" aria-label={t("skin.pulse.sort.label")}>
               {SORT_ORDER.map((key) => (

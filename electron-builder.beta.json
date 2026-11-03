@@ -4,7 +4,7 @@
   "productName": "Coterm Beta",
   "asar": true,
   "asarUnpack": ["node_modules/@lydell/node-pty/**", "node_modules/@livekit/**"],
-  "extraResources": [{ "from": "node_modules/smol-toml/dist/index.cjs", "to": "codex-team/smol-toml.cjs" }, { "from": "tools/codex-team", "to": "codex-team", "filter": ["*.mjs", "*.example"] }, { "from": "tools/coterm-at", "to": "coterm-at", "filter": ["*.md"] }],
+  "extraResources": [{ "from": "resources/voltdir", "to": "voltdir" }, { "from": "node_modules/smol-toml/dist/index.cjs", "to": "codex-team/smol-toml.cjs" }, { "from": "tools/codex-team", "to": "codex-team", "filter": ["*.mjs", "*.example"] }, { "from": "tools/coterm-at", "to": "coterm-at", "filter": ["*.md"] }],
   "files": [
     "out/**/*",
     "package.json",

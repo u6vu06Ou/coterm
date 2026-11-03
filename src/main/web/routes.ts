@@ -23,7 +23,7 @@ export const rpcMethods = [
   "createTerminal", "writeTerminal", "resizeTerminal", "requestTerminalGeometry", "renameTerminal", "setTerminalLabel", "markTerminalAgent", "markTerminalAgentOwned", "setTerminalNativeSessionId", "getPtyState", "setTerminalKeepalive", "listTerminalKeepalives", "getAgentStateExplanation", "getLastCommand", "getTerminalDashboard",
   "killTerminal", "listTerminals", "getTerminalWorkspace", "saveTerminalWorkspace", "getTerminalTranscript", "requestReadAloud",
   "getDockLayout", "openTile", "closeTile", "selectTile", "setDockLayout", "setExclusive",
-  "listAttention", "resolveAttention", "getUsageSnapshot", "getSystemActivity", "getAgentFileActivity", "getWorktreeRegistry",
+  "listAttention", "resolveAttention", "getUsageSnapshot", "getSystemActivity", "getAgentFileActivity", "getDiskOverview", "getWorktreeRegistry",
   // Phone/web +agent needs the shim dir too; without it the renderer falls back
   // to the inline env wall, which hard-wires LLM proxy and drops profile env
   // (claude-team opened from the phone silently ran on Qwen, 2026-10-06).
@@ -137,6 +137,7 @@ export function bindWebOperations(
     getAgentLauncherDir: () => getLauncherDir(),
     getSystemActivity: () => operations.getSystemActivity(),
     getAgentFileActivity: (input?: unknown) => operations.getAgentFileActivity(input),
+    getDiskOverview: (input: unknown) => operations.getDiskOverview(input),
     getWorktreeRegistry: () => operations.getWorktreeRegistry(),
     ...(agentapi ? {
       createAgentApiWorkflow: (input: unknown) => agentapi.create(input),

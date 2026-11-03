@@ -75,6 +75,116 @@ export interface SelectionEditInput {
   altScreen: boolean;
 }
 
+/**
+ * Buffer-row window the caller must read for planSelectionEdit. Starting from
+ * the selection and the cursor, expands up/down while rows continue a wrapped
+ * group (row at `top` isWrapped = the group started above), so the planner
+ * always sees the cursor's WHOLE logical line. Without the upward walk a
+ * selection inside a long soft-wrapped input line sat outside the old fixed
+ * 8-row window and the press degraded to clear-only — the user's remaining
+ * "selected text, Backspace, nothing happened" case.
+ *
+ * Expansion is double-bounded (MAX_WINDOW_ROWS) so a huge wrapped run can
+ * never turn one keypress into a full-buffer walk; when the bound truncates
+ * the group the planner's "top cut off" gate refuses and the caller falls
+ * back to clear-only — safe, never wrong-deleting.
+ */
+export const MAX_SELECTION_EDIT_WINDOW_ROWS = 512;
+
+export interface SelectionEditWindowInput {
+  /** Total rows in the active buffer. */
+  bufferLength: number;
+  /** Absolute row of the live CLI cursor. */
+  cursorY: number;
+  /** Selection bounds, any order. */
+  selectionStartY: number;
+  selectionEndY: number;
+  /** True when row y continues the previous row's logical line. */
+  isWrappedAt(row: number): boolean;
+  /** Extra rows to leave above/below the group (context for the planner). */
+  margin?: number;
+}
+
+export function resolveSelectionEditWindow(input: SelectionEditWindowInput): { top: number; bottom: number } | null {
+  const margin = input.margin ?? 2;
+  const selTop = Math.min(input.selectionStartY, input.selectionEndY);
+  const selBottom = Math.max(input.selectionStartY, input.selectionEndY);
+  if (selTop < 0 || selBottom >= input.bufferLength) return null;
+  if (input.cursorY < 0 || input.cursorY >= input.bufferLength) return null;
+  let top = Math.min(selTop, input.cursorY);
+  let bottom = Math.max(selBottom, input.cursorY);
+  // Walk the group boundaries out first; the margin lands OUTSIDE the group
+  // so the planner still sees rows[0].isWrapped === false on a complete group.
+  while (top > 0 && input.isWrappedAt(top) && bottom - top < MAX_SELECTION_EDIT_WINDOW_ROWS) top -= 1;
+  while (bottom + 1 < input.bufferLength && input.isWrappedAt(bottom + 1) && bottom - top < MAX_SELECTION_EDIT_WINDOW_ROWS) bottom += 1;
+  top = Math.max(0, top - margin);
+  bottom = Math.min(input.bufferLength - 1, bottom + margin);
+  // Hard bound on what the caller will allocate cells for. A selection
+  // spanning more than MAX rows on its own (e.g. a full-buffer drag with the
+  // cursor nearby) never enters the while guards, so the span check has to be
+  // final and include the margin — otherwise "bounded" would not hold and one
+  // keypress could read tens of thousands of buffer rows.
+  if (bottom - top + 1 > MAX_SELECTION_EDIT_WINDOW_ROWS + 2 * margin) return null;
+  return { top, bottom };
+}
+
+
+/**
+ * Minimal structural view of the live xterm instance the wiring needs. The
+ * adapter lives in TerminalDock (cell reads via IBufferLine/getNullCell);
+ * everything else — window resolution, far-away precheck, row assembly — is
+ * here so unit tests drive the EXACT production path, including the >8-row
+ * wrapped-input window walk and the scrollback clear-only refusal.
+ */
+export interface SelectionEditTerminalLike {
+  hasSelection(): boolean;
+  getSelectionPosition(): { start: { x: number; y: number }; end: { x: number; y: number } } | undefined;
+  buffer: {
+    length: number;
+    cursorX: number;
+    cursorY: number;
+    baseY: number;
+    type: string; // "normal" | "alternate"
+  };
+  /** All cells of one absolute buffer row; null when the row vanished mid-read. */
+  readRowCells(row: number): SelectionCellLike[] | null;
+  isRowWrapped(row: number): boolean;
+}
+
+export function buildSelectionEditInput(terminal: SelectionEditTerminalLike): SelectionEditInput | null {
+  const pos = terminal.getSelectionPosition();
+  if (!pos || !terminal.hasSelection()) return null;
+  const buf = terminal.buffer;
+  // getSelectionPosition() is absolute; cursorY is viewport-relative, so the
+  // live cursor lands at baseY + cursorY in the same space.
+  const cursor = { x: buf.cursorX, y: buf.baseY + buf.cursorY };
+  const selTop = Math.min(pos.start.y, pos.end.y);
+  const selBottom = Math.max(pos.start.y, pos.end.y);
+  // Cheap pre-check before any cell allocation: a selection entirely far away
+  // from the cursor (scrollback) is refused by the planner anyway.
+  if (selBottom < cursor.y - MAX_SELECTION_EDIT_WINDOW_ROWS || selTop > cursor.y + MAX_SELECTION_EDIT_WINDOW_ROWS) return null;
+  const range = resolveSelectionEditWindow({
+    bufferLength: buf.length,
+    cursorY: cursor.y,
+    selectionStartY: pos.start.y,
+    selectionEndY: pos.end.y,
+    isWrappedAt: (row) => terminal.isRowWrapped(row),
+  });
+  if (!range) return null;
+  const rows: SelectionEditRow[] = [];
+  for (let y = range.top; y <= range.bottom; y += 1) {
+    const cells = terminal.readRowCells(y);
+    if (!cells) return null;
+    rows.push({ cells, isWrapped: terminal.isRowWrapped(y) });
+  }
+  return {
+    rows,
+    baseY: range.top,
+    cursor,
+    selection: { start: pos.start, end: pos.end },
+    altScreen: buf.type === "alternate",
+  };
+}
 export type SelectionEditKey = "backspace" | "delete" | { char: string };
 
 export interface SelectionEditPlan {

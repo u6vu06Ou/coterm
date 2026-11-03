@@ -1,5 +1,6 @@
 import type {
   AgentFileActivity,
+  DiskOverviewReport,
   AgentOption,
   AppSettings,
   AppSettingsPatch,
@@ -301,6 +302,7 @@ export const IPC = {
   usageGet: "usage:get",
   systemActivityGet: "system-activity:get",
   agentFileActivityGet: "agent-file-activity:get",
+  diskOverviewGet: "disk-overview:get",
   worktreeRegistryGet: "worktree-registry:get",
   usageChanged: "usage:changed",
   // --- AgentApi fixed claude-local-main -> codex-local-main workflow ---------------------
@@ -557,6 +559,7 @@ export interface AiTerminalApi {
   getSystemActivity(): Promise<SystemActivity>;
   // Click-to-expand file list under the pulse (2026-10-06): per-file path/size/kind, capped 500. Polled while open.
   getAgentFileActivity(input?: { limit?: number }): Promise<AgentFileActivity>;
+  getDiskOverview(input: { projectId: string }): Promise<DiskOverviewReport>;
   // Session worktree registry (2026-10-12): read-only list of git worktrees created this session. Polled while open.
   getWorktreeRegistry(): Promise<WorktreeRegistryActivity>;
   onUsageChanged(callback: (snapshot: UsageSnapshot) => void): () => void;

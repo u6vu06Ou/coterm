@@ -150,6 +150,14 @@ export function installTuiDragSelect(
     const cell = cellAt(event);
     if (!cell) return;
     swallow(event);
+    // Swallowing the mousedown also suppresses the browser's default
+    // focus-move, so a pane that lost focus (user clicked the sidebar) never
+    // regains it on a drag — the following Backspace/Delete then lands on the
+    // OLD focused element instead of this terminal's key handler, and
+    // "select then delete" silently does nothing. Re-assert focus ONLY: no
+    // bytes are sent and the CLI caret does not move (click reporting stays
+    // with replayClick on a non-drag release).
+    terminal.focus();
     // 新的一次按下：清掉上一段選取（追蹤模式下 xterm 不會自己清）。
     if (terminal.hasSelection()) terminal.clearSelection();
     start = { x: event.clientX, y: event.clientY, cell, viewRow: cell.row - terminal.buffer.active.viewportY };

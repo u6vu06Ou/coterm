@@ -60,6 +60,8 @@ describe("Agent API resource board", () => {
           ptyRows: 28,
         }),
         listTerminals: () => [terminal],
+        getAgentFileActivity: () => ({ files: [{ path: "D:\\project\\report.md", size: 123, baselineSize: 0, mtimeMs: 1, kind: "created" }], total: 1 }),
+        getDiskOverview: (input) => ({ projectId: (input as { projectId: string }).projectId, totals: { files: 1 } }),
         // cpu 42 / 8 GiB of 32 GiB → cpuCapacity floor((75-42)/8)=4,
         // memCapacity floor((25.6-8)/0.6)=29, freeTiles 11 → recommended 4.
         getSystemActivity: () => ({
@@ -72,6 +74,17 @@ describe("Agent API resource board", () => {
   }
 
   const headers = () => ({ authorization: "Bearer secret" });
+
+  it("file metadata and disk inventory require the same bearer token", async () => {
+    const base = await start();
+    for (const route of ["files", `disk-overview?projectId=${PID}`]) {
+      expect((await fetch(`${base}/api/v1/agent/${route}`)).status).toBe(401);
+    }
+    const files = await fetch(`${base}/api/v1/agent/files?limit=10`, { headers: headers() });
+    expect(await files.json()).toMatchObject({ ok: true, activity: { total: 1, files: [{ path: "D:\\project\\report.md" }] } });
+    const disk = await fetch(`${base}/api/v1/agent/disk-overview?projectId=${PID}`, { headers: headers() });
+    expect(await disk.json()).toMatchObject({ ok: true, report: { projectId: PID, totals: { files: 1 } } });
+  });
 
   it("GET /resources requires the bearer token", async () => {
     const base = await start();

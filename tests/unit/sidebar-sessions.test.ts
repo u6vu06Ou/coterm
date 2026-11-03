@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectHistorySession } from "../../src/shared/types";
 import {
+  isTransientWorkingTitle,
+  openTileDisplayTitle,
   parseSessionDragPayload,
   parseSessionGroupDragPayload,
   planGroupOpen,
@@ -40,6 +42,30 @@ describe("resumableSessions", () => {
       { profileId: "claude-local-main", nativeSessionId: "a" },
       { profileId: "codex-local-main", nativeSessionId: "b" },
     ]);
+  });
+});
+
+describe("open tile display title", () => {
+  it("prefers the pane header's real summary over raw OSC title", () => {
+    expect(
+      openTileDisplayTitle(
+        { title: "Working", cwd: "D:/project" },
+        "檢查npm申請與Gmail",
+        "terminal-1",
+      ),
+    ).toBe("檢查npm申請與Gmail");
+  });
+
+  it("does not persist the transient working state as a title", () => {
+    expect(isTransientWorkingTitle("Working")).toBe(true);
+    expect(isTransientWorkingTitle("Thinking…")).toBe(true);
+    expect(isTransientWorkingTitle("檢查npm申請與Gmail")).toBe(false);
+    expect(
+      openTileDisplayTitle({ title: "Working", cwd: "D:/project" }, "Working", "terminal-1"),
+    ).toBe("project");
+    expect(
+      openTileDisplayTitle({ title: "Working", cwd: null as unknown as string }, null, "terminal-1234"),
+    ).toBe("pty 1234");
   });
 });
 

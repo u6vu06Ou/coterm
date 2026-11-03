@@ -134,12 +134,30 @@ test.beforeAll(async () => {
       selectTile: () => dockLayout,
       setDockLayout: () => dockLayout,
       refreshTerminal: () => undefined,
+      requestTerminalGeometry: () => undefined,
     } as never,
   });
   baseUrl = `http://127.0.0.1:${server.port}`;
 });
 
 test.afterAll(async () => server.close());
+
+test("phone enlarges the closed toolbar while menu items keep their original size", async ({ browser }) => {
+  const { context, page } = await openTouchPage(browser);
+  try {
+    await page.goto(baseUrl);
+    await page.locator(".boot-screen").waitFor({ state: "detached" });
+    const toggle = page.locator('[data-action-id="topbar.mobile.keys.toggle"]');
+    await expect(toggle).toHaveCSS("height", "76px");
+    await expect(page.locator(".mobile-menu-pty-label")).toHaveCSS("font-size", "20px");
+    await toggle.click();
+    await expect(page.locator(".mobile-menu-panel .mobile-pty-num").first()).toHaveCSS("font-size", "12px");
+    await expect(page.locator(".mobile-menu-panel .mobile-pty-slot").first()).toHaveCSS("height", "44px");
+    await expect(page.locator(".mobile-menu-panel .mobile-key-label").first()).toHaveCSS("font-size", "12px");
+  } finally {
+    await context.close();
+  }
+});
 
 test("reader announces new messages without moving the history being read", async ({ browser }) => {
   transcriptMessages = Array.from({ length: 40 }, (_, i) => ({
@@ -197,6 +215,46 @@ async function openTouchPage(browser: Browser): Promise<{ context: BrowserContex
   });
   return { context, page: await context.newPage() };
 }
+
+test("phone wake rebuilds a suspended renderer and fills the selected pane without a reload", async ({ browser }) => {
+  const { context, page } = await openTouchPage(browser);
+  const methods = collectRpcMethods(page);
+  try {
+    await page.goto(baseUrl);
+    await page.locator(".boot-screen").waitFor({ state: "detached" });
+    await expect(page.locator(".xterm-screen")).toHaveCount(1);
+    await page.waitForTimeout(500);
+    methods.length = 0;
+    await page.evaluate(() => {
+      Object.defineProperties(document, {
+        hidden: { configurable: true, value: true },
+        visibilityState: { configurable: true, value: "hidden" },
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.waitForTimeout(150);
+    expect(methods).not.toContain("getTerminalWorkspace");
+    await page.evaluate(() => {
+      Object.defineProperties(document, {
+        hidden: { configurable: true, value: false },
+        visibilityState: { configurable: true, value: "visible" },
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("focus"));
+    });
+    await expect.poll(() => methods.filter((method) => method === "getTerminalWorkspace").length).toBeGreaterThan(0);
+    await expect(page.locator(".xterm-pane-frame")).toHaveCount(1);
+    await expect.poll(() => page.locator(".xterm-host-remote").evaluate((host) => {
+      const screen = host.querySelector<HTMLElement>(".xterm-screen");
+      // A taller grid is intentionally pannable; only a shorter grid leaves
+      // the empty lower strip this regression guards against.
+      return screen ? Math.max(0, host.clientHeight - screen.getBoundingClientRect().height) : 9999;
+    })).toBeLessThan(60);
+    expect(methods).not.toContain("resizeTerminal");
+  } finally {
+    await context.close();
+  }
+});
 
 test("phone portrait-landscape-portrait keeps one selected remote terminal", async ({ browser }) => {
   const { context, page } = await openTouchPage(browser);
@@ -327,6 +385,96 @@ test("Codex reader pauses with a status message when transcript binding is ambig
     // renders the PTY-hard-wrapped raw text, it shows only the status block.
     await expect(page.locator(".terminal-reader-raw-pre")).toHaveCount(0);
   } finally {
+    await context.close();
+  }
+});
+
+async function readerPinchEvent(page: Page, type: "touchstart" | "touchmove" | "touchend", distance: number): Promise<void> {
+  await page.evaluate(({ type, distance }) => {
+    const target = document.querySelector<HTMLElement>(".terminal-reader-scroll")!;
+    const rect = target.getBoundingClientRect();
+    const touches = type === "touchend" ? [] : [0, 1].map((id) => new Touch({
+      identifier: id, target, clientX: rect.left + rect.width / 2 + (id ? 1 : -1) * distance / 2,
+      clientY: rect.top + rect.height / 2,
+    }));
+    target.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches, targetTouches: touches }));
+  }, { type, distance });
+}
+
+async function readerFont(page: Page): Promise<number> {
+  return page.locator(".terminal-reader-overlay").evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+}
+
+test("phone reader pinches a scaled conversation and keeps the visible message", async ({ browser }) => {
+  transcriptMessages = Array.from({ length: 120 }, (_, index) => ({
+    role: index % 2 ? "assistant" as const : "user" as const,
+    text: `Message ${index}: ` + Array.from({ length: index === 61 ? 180 : 12 }, (_, line) =>
+      `Paragraph ${line}: Readable Chinese 中文 and mixed text for stable zoom.`).join("\n\n"),
+    timestamp: null, endsTurn: true,
+  }));
+  const { context, page } = await openTouchPage(browser);
+  try {
+    await page.goto(baseUrl);
+    await page.locator(".boot-screen").waitFor({ state: "detached" });
+    await page.evaluate((terminalId) => window.dispatchEvent(new CustomEvent("coterm:reader-toggle", { detail: { terminalId } })), terminalIds[1]!);
+    await expect(page.locator(".terminal-reader-message")).toHaveCount(120);
+    expect(await readerFont(page)).toBe(20);
+    const scroller = page.locator(".terminal-reader-scroll");
+    // Start halfway through ONE very long answer, with many older/newer turns.
+    await scroller.evaluate((el) => {
+      const message = el.querySelector<HTMLElement>('[data-message-index="61"]')!;
+      el.scrollTop += message.getBoundingClientRect().top - el.getBoundingClientRect().top + message.clientHeight * 0.5;
+      el.dispatchEvent(new Event("scroll", { bubbles: false }));
+    });
+    await expect(page.locator('[data-action-id="terminal.reader.jump-bottom"]')).toBeVisible();
+    // Track an actual character, rather than accepting any location inside the answer.
+    const anchor = await page.evaluate(() => {
+      const el = document.querySelector<HTMLElement>(".terminal-reader-scroll")!;
+      const box = el.getBoundingClientRect();
+      const range = (document as Document & { caretRangeFromPoint(x: number, y: number): Range | null })
+        .caretRangeFromPoint(box.left + box.width / 2, box.top + box.height / 2)!;
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let index = 0;
+      while (walker.nextNode() !== range.startContainer) index++;
+      const marker = document.createRange();
+      marker.setStart(range.startContainer, range.startOffset);
+      marker.setEnd(range.startContainer, range.startOffset + 1);
+      return { index, offset: range.startOffset, y: marker.getBoundingClientRect().top - box.top };
+    });
+    const assertAnchor = async () => {
+      const y = await scroller.evaluate((el, anchor) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let node: Node | null = null;
+        for (let i = 0; i <= anchor.index; i++) node = walker.nextNode();
+        const range = document.createRange();
+        range.setStart(node!, anchor.offset);
+        range.setEnd(node!, anchor.offset + 1);
+        return range.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      }, anchor);
+      expect(Math.abs(y - anchor.y)).toBeLessThan(3);
+    };
+    await readerPinchEvent(page, "touchstart", 100);
+    // Each move is a separate browser turn and must produce a real layout change.
+    for (const distance of [115, 135, 150, 120]) {
+      await readerPinchEvent(page, "touchmove", distance);
+      await expect.poll(() => readerFont(page)).toBe(Math.round(20 * distance / 100));
+      await assertAnchor();
+    }
+    await readerPinchEvent(page, "touchend", 0);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("coterm-reader-font-size"))).toBe("24");
+    await page.reload();
+    await page.locator(".boot-screen").waitFor({ state: "detached" });
+    await page.evaluate((terminalId) => window.dispatchEvent(new CustomEvent("coterm:reader-toggle", { detail: { terminalId } })), terminalIds[1]!);
+    await expect(page.locator(".terminal-reader-message")).toHaveCount(120);
+    expect(await readerFont(page)).toBe(24);
+    await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(2);
+    await readerPinchEvent(page, "touchstart", 100);
+    await readerPinchEvent(page, "touchmove", 125);
+    await expect.poll(() => readerFont(page)).toBe(30);
+    await expect.poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(2);
+    await readerPinchEvent(page, "touchend", 0);
+  } finally {
+    transcriptMessages = [];
     await context.close();
   }
 });

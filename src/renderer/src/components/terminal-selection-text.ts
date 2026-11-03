@@ -87,7 +87,15 @@ export function selectionTextFromRows(rows: readonly SelectionTextRow[]): string
     const row = rows[i];
     return row !== undefined && (row.softWrapsNext || row.hardWrapsNext);
   };
-  const texts = rows.map((row, i) => rowText(row, !rows[i]?.softWrapsNext));
+  const texts = rows.map((row, i) => {
+    // A double-width glyph cannot fit in the last remaining column. xterm
+    // leaves that cell unwritten and wraps the glyph; it is not a text space.
+    // Written spaces and the continuation's actual indentation stay intact.
+    const lastCell = row.cells[row.cells.length - 1];
+    const wideWrapGap = row.softWrapsNext && row.endX >= row.cells.length &&
+      lastCell?.width === 1 && lastCell.chars === "" && rows[i + 1]?.cells[0]?.width === 2;
+    return rowText(wideWrapGap ? { ...row, endX: row.endX - 1 } : row, !row.softWrapsNext);
+  });
   let out = "";
   for (let i = 0; i < rows.length; i += 1) {
     let text = texts[i]!;

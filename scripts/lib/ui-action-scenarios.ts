@@ -23,6 +23,13 @@ export interface UiActionScenario {
  */
 export const UI_ACTION_SCENARIOS: UiActionScenario[] = [
   {
+    id: "project-disk-overview",
+    title: "project disk overview is on demand and lists copyable files",
+    file: "tests/e2e/ui-action-disk-overview.spec.ts",
+    actionIds: ["sidebar.pulse.disk.scan", "`sidebar.pulse.disk.file:${index}`"],
+    surfaces: ["desktop"],
+  },
+  {
     id: "app-fallback-reload",
     title: "app fallback reload restores the selected terminal",
     file: "tests/e2e/ui-action-recovery-gaps.spec.ts",
@@ -138,6 +145,13 @@ export const UI_ACTION_SCENARIOS: UiActionScenario[] = [
     file: "tests/e2e/ui-action-reading-mode.spec.ts",
     actionIds: ["topbar.reading-mode.toggle"],
     surfaces: ["desktop"],
+  },
+  {
+    id: "reader-pinch-and-font-persistence",
+    title: "phone reader pinches a scaled conversation and keeps the visible message",
+    file: "tests/e2e/responsive-geometry.spec.ts",
+    actionIds: [],
+    surfaces: ["mobile-web"],
   },
   {
     // 2026-10-02: dock picker button + popover grid of the 7 layout preset
@@ -417,4 +431,3 @@ export const UI_ACTION_SCENARIOS: UiActionScenario[] = [
     surfaces: ["desktop"],
   },
 ];
-

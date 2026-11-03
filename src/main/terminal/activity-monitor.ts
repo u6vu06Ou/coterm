@@ -35,6 +35,7 @@ import { logger } from "../core/logger";
 
 const FLUSH_MS = 2_000;
 const MAX_PENDING = 20_000;
+const MAX_FLUSH_BATCH = 512;
 const MAX_ROOTS = 16;
 export const MAX_LIST_FILES = 500;
 const DEFAULT_MAX_TRACKED_FILES = 5_000;
@@ -73,6 +74,7 @@ export class ActivityMonitor {
   private flushing = false;
   private lastCpu: { idle: number; total: number } | null = null;
   private stopped = false;
+  private cachedFiles: AgentFileActivity["files"] | null = null;
 
   constructor(private readonly options: ActivityMonitorOptions) {
     this.startedAt = (options.now ?? Date.now)();
@@ -80,6 +82,7 @@ export class ActivityMonitor {
   }
 
   start(): void {
+    if (this.flushTimer) return;
     this.stopped = false;
     this.lastCpu = sampleCpu();
     this.flushTimer = setInterval(() => void this.flush(), FLUSH_MS);
@@ -132,9 +135,11 @@ export class ActivityMonitor {
    */
   listFiles(limit = MAX_LIST_FILES): AgentFileActivity {
     const capped = Math.max(1, Math.min(MAX_LIST_FILES, Math.floor(limit) || MAX_LIST_FILES));
-    const entries = [...this.files.entries()].map(([path, file]) => ({ path, ...file }));
-    entries.sort((a, b) => (b.size - a.size) || (b.mtimeMs - a.mtimeMs));
-    return { files: entries.slice(0, capped), total: entries.length };
+    if (!this.cachedFiles) {
+      this.cachedFiles = [...this.files.entries()].map(([path, file]) => ({ path, ...file }));
+      this.cachedFiles.sort((a, b) => (b.size - a.size) || (b.mtimeMs - a.mtimeMs));
+    }
+    return { files: this.cachedFiles.slice(0, capped).map((file) => ({ ...file })), total: this.files.size };
   }
 
   /** Watch exactly the current terminal folders (nested folders share the outer watcher). */
@@ -178,17 +183,25 @@ export class ActivityMonitor {
   }
 
   private async flush(): Promise<void> {
-    if (this.flushing || this.pending.size === 0) return;
+    if (this.stopped || this.flushing || this.pending.size === 0) return;
     this.flushing = true;
-    const batch = [...this.pending];
-    this.pending.clear();
+    // A package/build burst must not create 20,000 stats in one flush. Leave
+    // the rest queued; each interval does a bounded amount of filesystem work.
+    const batch: string[] = [];
+    for (const path of this.pending) {
+      this.pending.delete(path);
+      batch.push(path);
+      if (batch.length >= MAX_FLUSH_BATCH) break;
+    }
     try {
       for (const path of batch) {
+        if (this.stopped) break;
         // Memory cap: already-tracked files keep updating, but no new entries
         // beyond the cap (no eviction churn; the list forgets small files).
         if (!this.files.has(path) && this.files.size >= this.maxTrackedFiles) continue;
         try {
           const info = await stat(path);
+          if (this.stopped) break;
           if (!info.isFile()) continue;
           if (info.mtimeMs >= this.startedAt || info.birthtimeMs >= this.startedAt) {
             const kind: AgentFileKind =
@@ -205,9 +218,10 @@ export class ActivityMonitor {
               mtimeMs: info.mtimeMs,
               kind,
             });
+            this.cachedFiles = null;
           }
         } catch {
-          this.files.delete(path);
+          if (this.files.delete(path)) this.cachedFiles = null;
         }
       }
     } finally {

@@ -11,10 +11,30 @@
 // unit-tested). Any bookkeeping mismatch falls back to the legacy text.
 
 import type { Terminal } from "@xterm/xterm";
+import { cleanTerminalCopy } from "@shared/value";
 import { rowHardWrapsInto, type TerminalCellLike } from "./terminal-links";
 import { selectionTextFromRows, type SelectionTextRow } from "./terminal-selection-text";
 
 const TRAILING_BLANKS = /[ \t\u00a0]+$/u;
+
+// Conservative fallback: keep line boundaries and leading/interior whitespace.
+// Never return raw full-width padding just because buffer bookkeeping differs.
+function trimRowPadding(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.replace(TRAILING_BLANKS, "")).join("\n");
+}
+
+/** Native/context-menu copy must use the same text as Ctrl+C and TUI drag. */
+export function installTerminalCopy(terminal: Terminal, host: HTMLElement): () => void {
+  const onCopy = (event: ClipboardEvent): void => {
+    if (!event.clipboardData || !terminal.hasSelection()) return;
+    event.clipboardData.setData("text/plain", cleanTerminalCopy(cellAccurateSelectionText(terminal)));
+    event.preventDefault();
+    // xterm's bubbling handler would otherwise overwrite our cleaned text.
+    event.stopImmediatePropagation();
+  };
+  host.addEventListener("copy", onCopy, true);
+  return () => host.removeEventListener("copy", onCopy, true);
+}
 
 /** One row's cells as text (wide tails skipped, blank cell = space, right-trimmed). */
 export function rowCellsText(cells: readonly TerminalCellLike[], startX = 0, endX = cells.length): string {
@@ -52,7 +72,7 @@ export function cellAccurateSelectionText(terminal: Terminal): string {
   if (!text) return text;
   const pos = terminal.getSelectionPosition();
   // A malformed/empty range can never improve on the legacy string.
-  if (!pos || pos.end.y < pos.start.y) return text;
+  if (!pos || pos.end.y < pos.start.y) return trimRowPadding(text);
   const buffer = terminal.buffer.active;
   // A selection whose end sits at column 0 of a later row highlights nothing
   // there; including that row would paste a blank trailing line.
@@ -74,7 +94,7 @@ export function cellAccurateSelectionText(terminal: Terminal): string {
   const cellsByRow: TerminalCellLike[][] = [];
   for (let y = pos.start.y; y <= endY; y += 1) {
     const cells = readCells(y);
-    if (!cells) return text;
+    if (!cells) return trimRowPadding(text);
     cellsByRow.push(cells);
   }
 
@@ -113,6 +133,6 @@ export function cellAccurateSelectionText(terminal: Terminal): string {
   // A mismatch means an exotic range neither hypothesis explains; the rebuilt
   // text could then drop or invent characters, so fall back to the legacy text.
   const expectedChunks = rows.reduce((n, _, i) => (i > 0 && rows[i - 1]!.softWrapsNext ? n : n + 1), 0);
-  if (!columnMode && text.split(/\r?\n/).length !== expectedChunks) return text;
+  if (!columnMode && text.split(/\r?\n/).length !== expectedChunks) return trimRowPadding(text);
   return selectionTextFromRows(rows);
 }

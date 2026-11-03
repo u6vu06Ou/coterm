@@ -306,6 +306,16 @@ export interface AgentFileActivity {
   files: AgentFileEntry[];
   total: number;
 }
+export interface DiskOverviewReport {
+  schema: "voltdir.overview/1";
+  root: string;
+  scannedAt: number;
+  partial: boolean;
+  totals: { files: number; dirs: number; logical: number; physical: number };
+  top_files: { items: { path: string; logical: number; physical: number }[] };
+  top_dirs: { items: { path: string; logical: number; physical: number }[] };
+  coverage: { incomplete_dirs: number; errors?: Record<string, number>; truncated?: boolean };
+}
 /**
  * One git worktree created after Coterm started (read-only registry shown in
  * the pulse panel, 2026-10-12 maintainer — agents leave parallel worktrees behind).

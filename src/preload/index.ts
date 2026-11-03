@@ -253,6 +253,7 @@ const api: AiTerminalApi = {
   getUsageSnapshot: () => ipcRenderer.invoke(IPC.usageGet),
   getSystemActivity: () => ipcRenderer.invoke(IPC.systemActivityGet),
   getAgentFileActivity: (input?: { limit?: number }) => ipcRenderer.invoke(IPC.agentFileActivityGet, input),
+  getDiskOverview: (input: { projectId: string }) => ipcRenderer.invoke(IPC.diskOverviewGet, input),
   getWorktreeRegistry: () => ipcRenderer.invoke(IPC.worktreeRegistryGet),
   refreshTerminal: (terminalId: string) => ipcRenderer.invoke(IPC.terminalRefresh, terminalId),
   deleteProject: (input: { projectId: string }) => ipcRenderer.invoke(IPC.projectDelete, input),

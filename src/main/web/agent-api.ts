@@ -426,6 +426,24 @@ export const agentApi = {
       return handleSessions(response, ctx);
     }
 
+    // File metadata shared with the human-facing sidebar; existing token gate applies.
+    if (segments.length === 1 && segments[0] === "files" && request.method === "GET") {
+      if (!ctx.operations.getAgentFileActivity) return json(response, 503, { ok: false, error: "File activity unavailable." }), true;
+      const activity = await ctx.operations.getAgentFileActivity({ limit: Number(url.searchParams.get("limit") ?? 100) });
+      return json(response, 200, { ok: true, activity }), true;
+    }
+    if (segments.length === 1 && segments[0] === "disk-overview" && request.method === "GET") {
+      if (!ctx.operations.getDiskOverview) return json(response, 503, { ok: false, error: "Disk overview unavailable." }), true;
+      const projectId = url.searchParams.get("projectId");
+      if (!projectId) return json(response, 400, { ok: false, error: "projectId is required." }), true;
+      try {
+        const report = await ctx.operations.getDiskOverview({ projectId });
+        return json(response, 200, { ok: true, report }), true;
+      } catch (error) {
+        return json(response, 503, { ok: false, error: error instanceof Error ? error.message : "Disk overview unavailable." }), true;
+      }
+    }
+
     // GET /resources — live machine load + how many more agent panes fit
     // (resource board). Read-only; not rate-limited. Agents should check this
     // before fanning out sub-agents (AGENTS.md Agent API section).

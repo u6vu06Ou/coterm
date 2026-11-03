@@ -389,6 +389,7 @@ export function registerIpc(dependencies: IpcDependencies): () => Promise<void> 
   handle(IPC.usageGet, () => operations.getUsageSnapshot());
   handle(IPC.systemActivityGet, () => operations.getSystemActivity());
   handle(IPC.agentFileActivityGet, (input: unknown) => operations.getAgentFileActivity(input));
+  handle(IPC.diskOverviewGet, (input: unknown) => operations.getDiskOverview(input));
   handle(IPC.worktreeRegistryGet, () => operations.getWorktreeRegistry());
   if (agentapi) {
     handle(IPC.agentapiCreate, (input: unknown) => agentapi.create(input));

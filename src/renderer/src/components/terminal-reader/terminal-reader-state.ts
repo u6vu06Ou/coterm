@@ -21,7 +21,8 @@ export interface ReaderState {
   searchRequest: ReaderSearchRequest | null;
 }
 
-const DEFAULT_FONT_SIZE = 16;
+const DEFAULT_FONT_SIZE = 20;
+const READER_FONT_STORAGE_KEY = "coterm-reader-font-size";
 
 export const READER_FONT_MIN = 12;
 export const READER_FONT_MAX = 32;
@@ -37,6 +38,27 @@ const READER_FONT_LADDER = [12, 14, 16, 18, 20, 22, 25, 28, 32];
 export function stepReaderFontSize(current: number, direction: 1 | -1): number {
   if (direction > 0) return READER_FONT_LADDER.find((size) => size > current) ?? READER_FONT_MAX;
   return [...READER_FONT_LADDER].reverse().find((size) => size < current) ?? READER_FONT_MIN;
+}
+
+function readStoredReaderFontSize(): number {
+  try {
+    if (typeof localStorage === "undefined") return DEFAULT_FONT_SIZE;
+    const raw = localStorage.getItem(READER_FONT_STORAGE_KEY);
+    if (!raw) return DEFAULT_FONT_SIZE;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? clampReaderFontSize(parsed) : DEFAULT_FONT_SIZE;
+  } catch {
+    return DEFAULT_FONT_SIZE;
+  }
+}
+
+function writeStoredReaderFontSize(size: number): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(READER_FONT_STORAGE_KEY, String(size));
+  } catch {
+    // Private browsing can deny storage; keep this session usable.
+  }
 }
 
 // Phone pinch: font follows the finger spread from where the pinch started,
@@ -114,7 +136,7 @@ class TerminalReaderController {
   getSnapshot = (): number => this.revision;
 
   get(terminalId: string): ReaderState {
-    return this.state.get(terminalId) ?? { open: false, fontSize: DEFAULT_FONT_SIZE, searchRequest: null };
+    return this.state.get(terminalId) ?? { open: false, fontSize: readStoredReaderFontSize(), searchRequest: null };
   }
 
   isOpenFor(terminalId: string): boolean { return this.get(terminalId).open; }
@@ -141,6 +163,8 @@ class TerminalReaderController {
   resetForTest(): void { this.state.clear(); this.revision += 1; this.emit(); }
 
   private update(terminalId: string, patch: Partial<ReaderState>): void {
+    const fontSize = patch.fontSize ?? this.get(terminalId).fontSize;
+    writeStoredReaderFontSize(fontSize);
     this.state.set(terminalId, { ...this.get(terminalId), ...patch });
     this.emit();
   }

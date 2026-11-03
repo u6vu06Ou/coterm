@@ -42,7 +42,7 @@ import { setInteractiveLauncherDir } from "./interactive-agent";
 import { READING_DRAG_MIME } from "./sidebar-sessions";
 import { buildAgentLaunchWriteInput } from "./launch-write";
 import { defaultActionForTerminalPath, findTerminalLinks, multiRowLinkRangeForMatch, multiRowTextAndColumnMap, normalizeTerminalPath, rowHardWrapsInto, type TerminalCellLike, type TerminalLogicalRow } from "./terminal-links";
-import { cellAccurateSelectionText } from "./terminal-copy";
+import { cellAccurateSelectionText, installTerminalCopy } from "./terminal-copy";
 import { installLinkUnderlineOverlay, type LinkMarkSegment } from "./terminal-link-marks";
 import { calculateImeAnchor } from "./terminal-ime-position";
 import {
@@ -77,11 +77,11 @@ import {
   routeCustomKey,
 } from "./terminal-input-routing";
 import {
+  buildSelectionEditInput,
   planSelectionEdit,
   type SelectionCellLike,
   type SelectionEditInput,
   type SelectionEditKey,
-  type SelectionEditRow,
 } from "./terminal-selection-edit";
 import { createTerminalStreamBatcher } from "./terminal-stream-batcher";
 import {
@@ -1766,8 +1766,17 @@ function XtermPane({
     if (typeof api.onTerminalGeometryChanged !== "function") return;
     return api.onTerminalGeometryChanged((payload) => {
       if (payload.terminalId !== info.id) return;
+      const prev = externalGeometryRef.current;
       externalGeometryRef.current = { cols: payload.cols, rows: payload.rows };
       reassertDesktopGeometry(true);
+      const changed = !prev || prev.cols !== payload.cols || prev.rows !== payload.rows;
+      if (changed && document.visibilityState === "visible" && document.hasFocus()) {
+        // Geometry reclaimed but the canvas still shows the foreign layout —
+        // run the standard recovery once per real change (coalesced). The
+        // unfocused case deliberately waits for the focus listener above so
+        // a background window never fights an incoming phone claim.
+        useAppStore.getState().requestTerminalRecovery(info.id, "geometry-reclaim");
+      }
     });
   }, [info.id, reassertDesktopGeometry]);
 
@@ -1775,7 +1784,26 @@ function XtermPane({
   // owned it while the user was away, and heal any fit a hidden host skipped
   // (ResizeObserver cannot measure a display:none / offscreen host).
   useEffect(() => {
-    if (window.aiTerminal.isBrowser) return;
+    if (window.aiTerminal.isBrowser) {
+      // Phone/web wake-from-standby: rAF/timers were throttled and the
+      // ResizeObserver frozen while hidden, so the remote fit, the canvas
+      // repaint and the rows-only geometry claim are all stale — the bottom
+      // dead zone that used to need a manual Refresh. Re-run the fit and
+      // walk the standard recovery pipeline (remeasure + replace replay
+      // + canvas refresh + focus/scroll); geometry itself stays an intent
+      // sent to main, never a remote resizeTerminal.
+      const onBrowserWake = (): void => {
+        if (document.visibilityState !== "visible") return;
+        remoteFitRef.current?.();
+        useAppStore.getState().requestTerminalRecovery(info.id, "browser-visibility-return");
+      };
+      window.addEventListener("focus", onBrowserWake);
+      document.addEventListener("visibilitychange", onBrowserWake);
+      return () => {
+        window.removeEventListener("focus", onBrowserWake);
+        document.removeEventListener("visibilitychange", onBrowserWake);
+      };
+    }
     const onFocus = (): void => reassertDesktopGeometry(false);
     const onVisibility = (): void => {
       if (document.visibilityState === "visible") reassertDesktopGeometry(false);
@@ -1786,7 +1814,7 @@ function XtermPane({
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [reassertDesktopGeometry]);
+  }, [info.id, reassertDesktopGeometry]);
 
   // Reader overlay close: the overlay swap can change the pane's layout
   // without firing the host ResizeObserver; closing it is exactly the moment
@@ -2137,46 +2165,37 @@ function XtermPane({
     // Backspace/Delete/printable over an input-line selection into arrow-key
     // moves + exact backspaces, so the CLI edits the HIGHLIGHTED range instead
     // of whatever sits at its own cursor. The cell walk mirrors the link
-    // provider's (isWrapped groups, width-0 wide-char tails skipped); window is
-    // a few rows around selection+cursor — the planner bails safely whenever
-    // the group boundaries run out of window.
+    // provider's (isWrapped groups, width-0 wide-char tails skipped); the window
+    // spans the cursor's WHOLE wrapped group (bounded at 512 rows by
+    // resolveSelectionEditWindow) — groups cut by that cap still bail safely.
     const readSelectionEditInput = (): SelectionEditInput | null => {
-      const pos = terminal.getSelectionPosition();
-      if (!pos || !terminal.hasSelection()) return null;
-      const buf = terminal.buffer.active;
-      // Absolute buffer row, same space as getSelectionPosition(): cursorY is
-      // viewport-relative, so with any scrollback the raw value lands in the
-      // wrong space and the planner refused every selection.
-      const cursor = { x: buf.cursorX, y: buf.baseY + buf.cursorY };
-      // Cheap pre-check before any cell allocation: the input line is at the
-      // cursor, so a selection entirely far away from it (scrollback) is
-      // refused by the planner anyway — don't walk thousands of rows for it.
-      const WINDOW = 8;
-      const selTop = Math.min(pos.start.y, pos.end.y);
-      const selBottom = Math.max(pos.start.y, pos.end.y);
-      if (selBottom < cursor.y - WINDOW || selTop > cursor.y + WINDOW) return null;
-      const top = Math.max(0, selTop - WINDOW);
-      const bottom = Math.min(buf.length - 1, Math.max(selBottom, cursor.y) + 2);
-      const rows: SelectionEditRow[] = [];
-      const scratch = buf.getNullCell();
-      for (let y = top; y <= bottom; y += 1) {
-        const line = buf.getLine(y);
-        if (!line) return null;
-        const cells: SelectionCellLike[] = [];
-        for (let x = 0; x < line.length; x += 1) {
-          const cell = line.getCell(x, scratch);
-          if (!cell) break;
-          cells.push({ chars: cell.getChars(), width: cell.getWidth() });
-        }
-        rows.push({ cells, isWrapped: line.isWrapped });
-      }
-      return {
-        rows,
-        baseY: top,
-        cursor,
-        selection: { start: pos.start, end: pos.end },
-        altScreen: buf.type === "alternate",
-      };
+      // The walk itself lives in terminal-selection-edit.ts so tests drive the
+      // production path end to end (far-away precheck, bounded group window,
+      // row assembly); here we only adapt the live xterm buffer.
+      return buildSelectionEditInput({
+        hasSelection: () => terminal.hasSelection(),
+        getSelectionPosition: () => terminal.getSelectionPosition(),
+        buffer: {
+          length: terminal.buffer.active.length,
+          cursorX: terminal.buffer.active.cursorX,
+          cursorY: terminal.buffer.active.cursorY,
+          baseY: terminal.buffer.active.baseY,
+          type: terminal.buffer.active.type,
+        },
+        readRowCells: (row) => {
+          const line = terminal.buffer.active.getLine(row);
+          if (!line) return null;
+          const scratch = terminal.buffer.active.getNullCell();
+          const cells: SelectionCellLike[] = [];
+          for (let x = 0; x < line.length; x += 1) {
+            const cell = line.getCell(x, scratch);
+            if (!cell) break;
+            cells.push({ chars: cell.getChars(), width: cell.getWidth() });
+          }
+          return cells;
+        },
+        isRowWrapped: (row) => terminal.buffer.active.getLine(row)?.isWrapped ?? false,
+      });
     };
     const applySelectionEdit = (key: SelectionEditKey): boolean => {
       if (clearNextDeleteRef.current) return false; // Ctrl+A bulk path owns the next delete.
@@ -2479,10 +2498,10 @@ function XtermPane({
           }
         },
         requestAuthoritativeReplay: (_replace, why) => {
-          if (why === "manual-refresh" || why === "mobile-refresh") {
-            // A user-requested refresh is deliberately stronger than an
-            // automatic resize recovery: fetch the current byte snapshot,
-            // then remount the entire renderer/addon stack from scratch.
+          if (why === "manual-refresh" || why === "mobile-refresh" || why === "browser-visibility-return") {
+            // Manual refresh and a browser returning from standby need a
+            // fresh byte snapshot and renderer/addon stack. Resize-only
+            // replay cannot heal a stale canvas left by a suspended WebView.
             void window.aiTerminal.getTerminalWorkspace(info.projectId).then((workspace) => {
               if (disposed) return;
               const authoritative = workspace.scrollback[info.id];
@@ -2640,23 +2659,53 @@ function XtermPane({
     // times a second) into one terminal.write() per animation frame. Each
     // write forces a full re-parse/repaint (expensive on mobile WebViews);
     // scheduleScroll above only throttled the scroll half of this pipeline.
+    // Hidden-window guard: rAF is FROZEN while the page is backgrounded, so a
+    // pure-rAF schedule accumulates chunks for the whole standby and lands
+    // them as one giant write on wake (the long-idle freeze). While hidden we
+    // coalesce on a timer instead, and a size cap forces an immediate flush
+    // under any flood, hidden or not.
+    // (string.length = UTF-16 code units: this counts CHARS, not bytes.)
+    const MAX_PENDING_WRITE_CHARS = 256 * 1024;
     let pendingWriteChunks: string[] = [];
+    let pendingWriteChars = 0;
     let writeFrameId: number | null = null;
+    let writeTimerId: ReturnType<typeof setTimeout> | null = null;
     const flushPendingWrites = (): void => {
       writeFrameId = null;
+      if (writeTimerId !== null) {
+        clearTimeout(writeTimerId);
+        writeTimerId = null;
+      }
       if (pendingWriteChunks.length === 0) return;
       const buf = terminal.buffer.active;
       const wasAtBottom = buf.viewportY >= buf.baseY - 1;
       const chunk = pendingWriteChunks.join("");
       pendingWriteChunks = [];
+      pendingWriteChars = 0;
       terminal.write(renderData(chunk), () => {
         if (wasAtBottom) scheduleScroll();
       });
     };
     const scheduleWrite = (data: string): void => {
       pendingWriteChunks.push(data);
-      if (writeFrameId !== null) return;
-      writeFrameId = requestAnimationFrame(flushPendingWrites);
+      pendingWriteChars += data.length;
+      if (pendingWriteChars >= MAX_PENDING_WRITE_CHARS) {
+        if (writeFrameId !== null) {
+          cancelAnimationFrame(writeFrameId);
+          writeFrameId = null;
+        }
+        flushPendingWrites();
+        return;
+      }
+      if (writeFrameId !== null || writeTimerId !== null) return;
+      if (document.hidden) {
+        writeTimerId = setTimeout(() => {
+          writeTimerId = null;
+          flushPendingWrites();
+        }, 50);
+      } else {
+        writeFrameId = requestAnimationFrame(flushPendingWrites);
+      }
     };
     // Remote (browser/mobile): coalesce chunks via a 48ms quiet-window batcher
     // instead of rAF. Mobile WebViews throttle rAF when backgrounded and paint
@@ -2704,7 +2753,12 @@ function XtermPane({
         cancelAnimationFrame(writeFrameId);
         writeFrameId = null;
       }
+      if (writeTimerId !== null) {
+        clearTimeout(writeTimerId);
+        writeTimerId = null;
+      }
       pendingWriteChunks = [];
+      pendingWriteChars = 0;
       remoteBatcher?.dispose();
       remoteBatcher = isDesktop ? null : createRemoteBatcher();
       terminal.reset();
@@ -3049,6 +3103,7 @@ function XtermPane({
     host.addEventListener("click", onClickMoveCaret);
     // Plain drag selects text even inside mouse-tracking TUIs (Claude Code /
     // Codex); xterm alone only selects there with Shift held.
+    const uninstallTerminalCopy = installTerminalCopy(terminal, host);
     const uninstallTuiDragSelect = installTuiDragSelect(terminal, host, (chars) => {
       const frame = host.closest<HTMLElement>(".xterm-pane-frame");
       if (!frame) return;
@@ -3643,11 +3698,13 @@ function XtermPane({
       host.removeEventListener("wheel", onWheel, wheelOptions);
       host.removeEventListener("click", onClickMoveCaret);
       uninstallTuiDragSelect();
+      uninstallTerminalCopy();
       if (fontResizeTimer) clearTimeout(fontResizeTimer);
       if (justComposedClearTimer !== null) clearTimeout(justComposedClearTimer);
       if (resizeTimer) clearTimeout(resizeTimer);
       if (scrollFrameId !== null) cancelAnimationFrame(scrollFrameId);
       if (writeFrameId !== null) cancelAnimationFrame(writeFrameId);
+      if (writeTimerId !== null) clearTimeout(writeTimerId);
       if (remotePanResetFrame !== null) cancelAnimationFrame(remotePanResetFrame);
       remoteBatcher?.dispose();
       applyAuthoritativeSnapshotRef.current = null;
@@ -3737,20 +3794,44 @@ function XtermPane({
       if (mobileInputController.isOpenFor(info.id)) return;
       const terminal = terminalRef.current;
       const host = hostRef.current;
-      if (!terminal || !host || host.clientHeight <= 0) return;
+      if (!terminal || !host || host.clientHeight <= 0) {
+        // First mount / pane reopen can run before layout settles. No polling:
+        // the host ResizeObserver below re-fires claim exactly when the pane
+        // gains a measurable height (also covers hidden -> shown), and a
+        // display:none pane never observes a size change, so nothing spins.
+        return;
+      }
       const cellHeight = readTerminalCellMetrics(terminal)?.height
         || ((terminal.options.fontSize ?? 14) * TERMINAL_TYPOGRAPHY.mobileLineHeight);
       if (!(cellHeight > 0)) return;
       const desired = Math.max(8, Math.min(160, Math.floor(host.clientHeight / cellHeight)));
       if (Math.abs(desired - info.rows) < 2) return;
+      // Reclaim supersedes a pending one — otherwise an overlapping wake/resize
+      // pair fires two geometry intents with stale measurements.
+      if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
         void window.aiTerminal.requestTerminalGeometry({ terminalId: info.id, cols: info.cols, rows: desired }).catch(() => undefined);
       }, 250);
     };
+    const claimOnWake = (): void => {
+      if (document.visibilityState === "visible") claim();
+    };
     claim();
     window.addEventListener("resize", claim);
     window.addEventListener("orientationchange", claim);
+    window.addEventListener("focus", claimOnWake);
+    document.addEventListener("visibilitychange", claimOnWake);
+    // Layout-readiness claim: the only source for first-mount-before-layout
+    // and hidden-pane-shown-again cases. Event-driven, never a poll loop.
+    const initialHost = hostRef.current;
+    let readinessObserver: ResizeObserver | null = null;
+    if (initialHost) {
+      readinessObserver = new ResizeObserver(() => {
+        if ((hostRef.current?.clientHeight ?? 0) > 0) claim();
+      });
+      readinessObserver.observe(initialHost);
+    }
     let composerWasOpen = mobileInputController.isOpenFor(info.id);
     const unsubscribeComposer = mobileInputController.subscribe(() => {
       const open = mobileInputController.isOpenFor(info.id);
@@ -3759,8 +3840,11 @@ function XtermPane({
     });
     return () => {
       if (timer) clearTimeout(timer);
+      readinessObserver?.disconnect();
       window.removeEventListener("resize", claim);
       window.removeEventListener("orientationchange", claim);
+      window.removeEventListener("focus", claimOnWake);
+      document.removeEventListener("visibilitychange", claimOnWake);
       unsubscribeComposer();
     };
   }, [isActive, info.id, info.cols, info.rows]);

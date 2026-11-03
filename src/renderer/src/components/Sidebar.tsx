@@ -35,12 +35,12 @@ import {
   openSessionGroup,
   openSessionResumed,
   resumableSessions,
+  openTileDisplayTitle,
 } from "./sidebar-sessions";
 import type { GlobalSearchResult, ProjectHistorySession, AttentionNotification } from "@shared/types";
 import { MOBILE_LAYOUT_QUERY } from "./terminal-responsive";
 import { SunMoonMark, SunMoonPulse } from "./SunMoonChrome";
 import { UsageHud } from "./usage-hud";
-import { shellExecutableName } from "./terminal-display-title";
 import { canApplySearchGeneration } from "./search-generation";
 import { formatAppVersionLabel } from "./app-version-label";
 import { shouldDeferGlobalShortcut } from "./global-shortcut-guard";
@@ -312,11 +312,19 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
   // (markAgent / rename). Busy/idle lights read the store's ptyStates — the
   // single onPtyStateChanged subscription — so they stay live for free.
   const [openTileMeta, setOpenTileMeta] = useState<Record<string, { title: string; cwd: string }>>({});
+  const [openTileSummaries, setOpenTileSummaries] = useState<Record<string, string>>({});
   const refreshOpenTileMeta = useCallback((): void => {
     void window.aiTerminal.getTerminalDashboard().then((entries) => {
       const next: Record<string, { title: string; cwd: string }> = {};
       for (const entry of entries) next[entry.id] = { title: entry.title, cwd: entry.cwd };
       setOpenTileMeta(next);
+      // A dashboard reply can predate a new pane's summary. Prune against the
+      // current layout, never that potentially stale dashboard snapshot.
+      const liveIds = new Set(useAppStore.getState().dockLayout.tiles.map((tile) => tile.terminalId));
+      setOpenTileSummaries((prev) => {
+        const entries = Object.entries(prev).filter(([id]) => liveIds.has(id));
+        return entries.length === Object.keys(prev).length ? prev : Object.fromEntries(entries);
+      });
     }).catch(() => setOpenTileMeta({}));
   }, []);
   useEffect(() => {
@@ -328,6 +336,25 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
     if (!isDesktop) return;
     return window.aiTerminal.onTerminalListChanged(() => refreshOpenTileMeta());
   }, [isDesktop, refreshOpenTileMeta]);
+
+  useEffect(() => {
+    if (!isDesktop) return;
+    const onSummary = (event: Event): void => {
+      const raw = (event as CustomEvent<Record<string, unknown>>).detail;
+      if (!raw || typeof raw.terminalId !== "string") return;
+      const detail = raw as { terminalId: string; summary?: unknown };
+      const summary = typeof detail.summary === "string" && detail.summary.trim() ? detail.summary.trim() : null;
+      setOpenTileSummaries((prev) => {
+        if ((prev[detail.terminalId] ?? null) === summary) return prev;
+        const next = { ...prev };
+        if (summary) next[detail.terminalId] = summary;
+        else delete next[detail.terminalId];
+        return next;
+      });
+    };
+    window.addEventListener("coterm:session-summary", onSummary);
+    return () => window.removeEventListener("coterm:session-summary", onSummary);
+  }, [isDesktop]);
 
   // An open-tile row focuses its window — same contract as the history branch's
   // focusHistorySession: pin the selection locally, then select through main.
@@ -724,7 +751,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
                   .map((tile) => {
                     const state = ptyStates[tile.terminalId] ?? null;
                     const labelKey = ptyStateLabelKey(state);
-                    const name = openTileDisplayName(openTileMeta[tile.terminalId], tile.terminalId);
+                    const name = openTileDisplayTitle(openTileMeta[tile.terminalId], openTileSummaries[tile.terminalId], tile.terminalId);
                     const isActive = dockLayout.selectedTerminalId === tile.terminalId;
                     return (
                       <li key={tile.terminalId}>
@@ -855,7 +882,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
             {openTileRows.map(({ tile, projectName }) => {
               const state = ptyStates[tile.terminalId] ?? null;
               const labelKey = ptyStateLabelKey(state);
-              const name = openTileDisplayName(openTileMeta[tile.terminalId], tile.terminalId);
+              const name = openTileDisplayTitle(openTileMeta[tile.terminalId], openTileSummaries[tile.terminalId], tile.terminalId);
               const isActive = dockLayout.selectedTerminalId === tile.terminalId;
               return (
                 <li key={tile.terminalId}>
@@ -1032,15 +1059,6 @@ function groupHistorySessions(sessions: ProjectHistorySession[]): Array<[string,
     groups.set(key, items);
   }
   return [...groups.entries()];
-}
-
-// Title-first display name for an open tile: agent-authored titles beat the
-// cwd basename; both missing (still hydrating) falls back to the raw id tail.
-function openTileDisplayName(meta: { title: string; cwd: string } | undefined, terminalId: string): string {
-  const title = meta?.title?.trim();
-  if (title) return shellExecutableName(title) ?? title;
-  const base = (meta?.cwd ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-  return base || `pty ${terminalId.slice(-4)}`;
 }
 
 function closeSidebarOnMobile(): void {

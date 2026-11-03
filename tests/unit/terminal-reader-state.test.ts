@@ -26,16 +26,16 @@ describe("terminal reader state", () => {
     terminalReaderController.resetForTest();
     terminalReaderController.toggle("a");
     terminalReaderController.adjustFont("a", 4);
-    expect(terminalReaderController.get("a")).toMatchObject({ open: true, fontSize: 20 });
+    expect(terminalReaderController.get("a")).toMatchObject({ open: true, fontSize: 24 });
     expect(terminalReaderController.get("b").open).toBe(false);
   });
   it("closes and resets the font per terminal", () => {
     terminalReaderController.resetForTest();
     terminalReaderController.toggle("a");
     terminalReaderController.stepFont("a", 1);
-    expect(terminalReaderController.get("a").fontSize).toBe(18);
+    expect(terminalReaderController.get("a").fontSize).toBe(22);
     terminalReaderController.resetFont("a");
-    expect(terminalReaderController.get("a").fontSize).toBe(16);
+    expect(terminalReaderController.get("a").fontSize).toBe(20);
     terminalReaderController.close("a");
     expect(terminalReaderController.get("a").open).toBe(false);
   });

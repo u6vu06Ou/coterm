@@ -1,6 +1,7 @@
 import type { ProjectHistorySession } from "@shared/types";
 import { useAppStore } from "../store/app-store";
 import { canResumeProfile } from "./interactive-agent";
+import { shellExecutableName } from "./terminal-display-title";
 
 /**
  * f2 側欄 session 分支（1.5.46, next-rev board）:
@@ -22,6 +23,35 @@ export const SESSION_GROUP_DRAG_MIME = "application/x-coterm-session-group";
  * Kept here beside the session MIMEs so every drag surface imports one list.
  */
 export const READING_DRAG_MIME = "application/x-coterm-terminal";
+
+/**
+ * The pane header may use a real work summary, while the open-tile metadata
+ * still carries the same OSC spinner text. This separates a transient status
+ * label from a real title so sidebar rows don't persist the working state as
+ * a session name.
+ */
+export function isTransientWorkingTitle(title: string | null | undefined): boolean {
+  if (!title) return false;
+  return /^(working|thinking)(?:…|\.\.\.)?$/iu.test(title.trim());
+}
+
+/**
+ * SIDEBAR title resolution: prefer the pane header's real summary, then any
+ * non-spinner OSC title, then cwd. A transient "Working"/"Thinking" label is
+ * deliberately never persisted as a name; the status lamp is separate.
+ */
+export function openTileDisplayTitle(
+  meta: { title: string; cwd: string } | undefined,
+  summary: string | null | undefined,
+  terminalId: string,
+): string {
+  const summaryText = summary?.trim();
+  if (summaryText && !isTransientWorkingTitle(summaryText)) return summaryText;
+  const title = meta?.title?.trim();
+  if (title && !isTransientWorkingTitle(title)) return shellExecutableName(title) ?? title;
+  const base = (meta?.cwd ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  return base || `pty ${terminalId.slice(-4)}`;
+}
 
 export interface SessionDragItem {
   profileId: string;
