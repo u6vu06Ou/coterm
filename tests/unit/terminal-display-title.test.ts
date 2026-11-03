@@ -195,15 +195,15 @@ describe("marqueeDurationSeconds", () => {
   });
 
   it("clamps both ends so it creeps rather than flicks or stalls", () => {
-    expect(marqueeDurationSeconds(0)).toBe(6);
-    expect(marqueeDurationSeconds(10)).toBe(6);
+    expect(marqueeDurationSeconds(0)).toBe(4.8);
+    expect(marqueeDurationSeconds(10)).toBe(4.8);
     expect(marqueeDurationSeconds(1_000_000)).toBe(60);
   });
 
-  it("keeps a reading pace of about 5.5 characters per second", () => {
-    // 13px font -> ~71 px/s; 700px of overflow is ~10s of motion plus holds.
-    expect(marqueeDurationSeconds(700, 13)).toBeGreaterThanOrEqual(11);
-    expect(marqueeDurationSeconds(700, 13)).toBeLessThanOrEqual(13);
+  it("runs about 25 percent faster while keeping a font-relative reading pace", () => {
+    // 13px font -> ~89 px/s; 700px of overflow takes about 10s including holds.
+    expect(marqueeDurationSeconds(700, 13)).toBe(10);
+    expect(marqueeDurationSeconds(2200, 20)).toBe(20);
     // a larger font scrolls proportionally faster in px/s
     expect(marqueeDurationSeconds(700, 16)).toBeLessThan(marqueeDurationSeconds(700, 13));
   });

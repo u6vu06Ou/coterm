@@ -18,9 +18,13 @@ import {
   Settings,
   History,
   Eye,
+  Volume2,
+  Square,
+  Loader2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useAppStore } from "../store/app-store";
+import { toggleReadAloud, useReadAloudStatus } from "./read-aloud-player";
 import { themeTogglePatch } from "../store/settings-patches";
 import { useI18n } from "../i18n";
 import type { PtyState } from "@shared/types";
@@ -214,6 +218,7 @@ export function TopBar(): React.JSX.Element {
   // TODO(overhaul): dockLayout is added to the store by T3 (app-store owner).
   // Until then this references a field that does not yet exist on AppState.
   const activeTerminalId = dockLayout.selectedTerminalId;
+  const readAloudStatus = useReadAloudStatus(activeTerminalId ?? "");
   useEffect(() => {
     const tray = tabTrayRef.current;
     const workspace = tray?.closest<HTMLElement>(".workspace-shell");
@@ -580,6 +585,23 @@ export function TopBar(): React.JSX.Element {
                 ))}
               </div>
               <div className="mobile-menu-section-label">TOOLS</div>
+              <button
+                data-action-id="topbar.mobile.read-aloud.toggle"
+                type="button"
+                className="mobile-dock-btn mobile-read-aloud"
+                aria-label={readAloudStatus === "playing" ? t("dock.readAloud.stop") : t("dock.readAloud.toggle")}
+                aria-busy={readAloudStatus === "loading"}
+                disabled={!activeTerminalId}
+                onClick={() => {
+                  if (!activeTerminalId) return;
+                  void toggleReadAloud(activeTerminalId, activeSessionSummary?.summary || "terminal");
+                }}
+              >
+                {readAloudStatus === "loading" ? <Loader2 size={20} className="is-spinning" />
+                  : readAloudStatus === "playing" ? <Square size={18} /> : <Volume2 size={20} />}
+                {readAloudStatus === "loading" ? t("dock.readAloud.busy")
+                  : readAloudStatus === "playing" ? t("dock.readAloud.stop") : t("dock.readAloud.toggle")}
+              </button>
               <div className="mobile-keys-tray">
                 <button data-action-id="topbar.mobile.stop" type="button" className="mobile-dock-btn mobile-key-stop" title={t("topbar.keys.stop")} disabled={!activeTerminalId} onClick={sendStop}>
                   <span className="mobile-key-label">STOP</span>

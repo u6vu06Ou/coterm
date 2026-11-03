@@ -23,6 +23,13 @@ export interface UiActionScenario {
  */
 export const UI_ACTION_SCENARIOS: UiActionScenario[] = [
   {
+    id: "mobile-header-narration",
+    title: "phone header gives the summary a full row and keeps narration away from close",
+    file: "tests/e2e/responsive-geometry.spec.ts",
+    actionIds: ["topbar.mobile.read-aloud.toggle"],
+    surfaces: ["mobile-web"],
+  },
+  {
     id: "project-disk-overview",
     title: "project disk overview is on demand and lists copyable files",
     file: "tests/e2e/ui-action-disk-overview.spec.ts",

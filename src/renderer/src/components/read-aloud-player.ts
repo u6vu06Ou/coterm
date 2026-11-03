@@ -41,7 +41,7 @@ function subscribe(listener: () => void): () => void {
 
 /** React hook for the per-pane button state. */
 export function useReadAloudStatus(terminalId: string): ReadAloudStatus {
-  const current = useSyncExternalStore(subscribe, () => state);
+  const current = useSyncExternalStore(subscribe, () => state, () => state);
   if (current.terminalId !== terminalId) return "idle";
   return current.status;
 }

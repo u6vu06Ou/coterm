@@ -27,11 +27,11 @@ test("mobile readability keeps topbar, pane header, and settings close clear", a
         labelFontSize: Number.parseFloat(getComputedStyle(paneHeader.querySelector(".xterm-pane-label") ?? paneHeader).fontSize),
       };
     });
-    expect(geometry.topbarHeight).toBe(76);
-    expect(geometry.paneHeaderHeight).toBe(48);
-    expect(geometry.paneHeaderFontSize).toBe(18);
+    expect(geometry.topbarHeight).toBe(56);
+    expect(geometry.paneHeaderHeight).toBe(88);
+    expect(geometry.paneHeaderFontSize).toBe(20);
     expect(geometry.topbarFontSize).toBe(20);
-    expect(geometry.labelFontSize).toBe(18);
+    expect(geometry.labelFontSize).toBe(20);
 
     await page.locator('[data-action-id="topbar.mobile.settings.open"]').click();
     const drawer = page.locator('[data-action-id="settings.drawer.consume"]');

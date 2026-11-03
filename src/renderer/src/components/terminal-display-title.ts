@@ -33,15 +33,15 @@ export function shouldMarqueeSessionSummary(input: {
 
 /**
  * Seconds for one right-to-left pass plus the end/start holds (8% each end of
- * the keyframes). Speed adapts to the glyph size: ~5.5 characters per second is a
+ * the keyframes). Speed adapts to the glyph size: ~6.9 characters per second is a
  * comfortable pace for scrolling text, so a bigger font scrolls proportionally
  * faster in px/s. Clamped so a tiny overflow still creeps and a huge one ends.
  */
 export function marqueeDurationSeconds(overflowPx: number, fontPx = 13): number {
-  const MIN_SECONDS = 6;
+  const MIN_SECONDS = 4.8;
   const MAX_SECONDS = 60;
-  const CHARS_PER_SECOND = 5.5;
-  const pxPerSecond = Math.min(110, Math.max(45, fontPx * CHARS_PER_SECOND));
+  const CHARS_PER_SECOND = 6.875;
+  const pxPerSecond = Math.min(137.5, Math.max(56.25, fontPx * CHARS_PER_SECOND));
   if (overflowPx <= 0) return MIN_SECONDS;
   const moving = overflowPx / pxPerSecond;
   return Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Math.round(moving / 0.84 + 0.5)));

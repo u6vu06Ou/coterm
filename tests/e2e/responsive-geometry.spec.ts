@@ -7,6 +7,7 @@ import { MOBILE_LAYOUT_QUERY } from "../../src/renderer/src/components/terminal-
 import type { TerminalTranscriptMessage } from "../../src/shared/types";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
+const providerSummary = "評估清理 Mac 容量與安裝，保留重要檔案並整理完整報告";
 const terminalIds = [
   "21111111-1111-4111-8111-111111111111",
   "22222222-2222-4222-8222-222222222222",
@@ -40,7 +41,8 @@ test.beforeAll(async () => {
     nativeSessionId: null,
     worktreeId: null,
     contextUsage: null,
-    agentSummaryTitle: index === 1 ? "Investigate mobile PTY horizontal pan" : null,
+    agentSummaryTitle: index === 1 ? providerSummary : null,
+    agentHandle: index === 1 ? "codex-9" : null,
   }));
   const dockLayout = {
     tiles: terminalIds.map((terminalId, index) => ({ terminalId, projectId, weight: 1, agentProfile: index === 1 ? "codex-official" as const : null })),
@@ -135,6 +137,7 @@ test.beforeAll(async () => {
       setDockLayout: () => dockLayout,
       refreshTerminal: () => undefined,
       requestTerminalGeometry: () => undefined,
+      requestReadAloud: () => ({ ok: false, error: "empty" }),
     } as never,
   });
   baseUrl = `http://127.0.0.1:${server.port}`;
@@ -142,18 +145,86 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => server.close());
 
-test("phone enlarges the closed toolbar while menu items keep their original size", async ({ browser }) => {
+test("phone toolbar buttons align while menu items keep their original size", async ({ browser }) => {
   const { context, page } = await openTouchPage(browser);
   try {
     await page.goto(baseUrl);
     await page.locator(".boot-screen").waitFor({ state: "detached" });
     const toggle = page.locator('[data-action-id="topbar.mobile.keys.toggle"]');
-    await expect(toggle).toHaveCSS("height", "76px");
+    await expect(toggle).toHaveCSS("height", "56px");
     await expect(page.locator(".mobile-menu-pty-label")).toHaveCSS("font-size", "20px");
     await toggle.click();
     await expect(page.locator(".mobile-menu-panel .mobile-pty-num").first()).toHaveCSS("font-size", "12px");
     await expect(page.locator(".mobile-menu-panel .mobile-pty-slot").first()).toHaveCSS("height", "44px");
     await expect(page.locator(".mobile-menu-panel .mobile-key-label").first()).toHaveCSS("font-size", "12px");
+  } finally {
+    await context.close();
+  }
+});
+
+test("phone header gives the summary a full row and keeps narration away from close", async ({ browser }) => {
+  const { context, page } = await openTouchPage(browser);
+  const methods = collectRpcMethods(page);
+  try {
+    await page.goto(baseUrl);
+    await page.locator(".boot-screen").waitFor({ state: "detached" });
+    const header = page.locator(".xterm-pane-frame > header");
+    await expect(header.locator(".xterm-agent-label")).toContainText("評估清理 Mac");
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((theme) => {
+          document.documentElement.dataset.skin = "sunmoon";
+          document.documentElement.dataset.theme = theme;
+        }, theme);
+        const boxes = await page.evaluate(() => {
+          const rect = (selector: string) => {
+            const el = document.querySelector<HTMLElement>(selector)!;
+            const r = el.getBoundingClientRect();
+            return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height,
+              font: Number.parseFloat(getComputedStyle(el).fontSize), client: el.clientWidth, scroll: el.scrollWidth };
+          };
+          return {
+            summary: rect(".xterm-header-identity .xterm-agent-label"),
+            model: rect(".xterm-model-label"),
+            close: rect('[data-action-id="terminal.close"]'),
+            sidebar: rect('[data-action-id="sidebar.expand"]'),
+            settings: rect('[data-action-id="topbar.mobile.settings.open"]'),
+            enter: rect('[data-action-id="topbar.mobile.enter"]'),
+            toggle: rect(".mobile-menu-toggle"),
+            header: rect(".xterm-pane-frame > header"),
+            terminal: rect(".xterm-host"),
+          };
+        });
+        expect(boxes.header.height).toBe(88);
+        expect(boxes.summary.font).toBe(20);
+        expect(boxes.summary.width).toBeGreaterThan(width - 40);
+        expect(boxes.summary.top).toBeGreaterThanOrEqual(boxes.close.bottom);
+        expect(boxes.summary.bottom).toBeLessThanOrEqual(boxes.header.bottom);
+        expect(boxes.terminal.top).toBeGreaterThanOrEqual(boxes.header.bottom);
+        expect(boxes.model.scroll).toBeLessThanOrEqual(boxes.model.client);
+        expect(boxes.model.right).toBeLessThan(boxes.close.left);
+        expect(boxes.close.width).toBeGreaterThanOrEqual(44);
+        for (const box of [boxes.sidebar, boxes.settings, boxes.enter]) {
+          expect(box.height).toBe(56);
+          expect(box.width).toBe(56);
+          expect(Math.abs(box.top - boxes.toggle.top)).toBeLessThanOrEqual(1);
+        }
+        await expect(header.locator('[data-action-id="terminal.read-aloud.toggle"]')).toHaveCount(0);
+      }
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+    await page.screenshot({ path: "logs/mobile-header-1.5.78.png" });
+    await page.locator('[data-action-id="topbar.mobile.keys.toggle"]').click();
+    const narration = page.locator('[data-action-id="topbar.mobile.read-aloud.toggle"]');
+    await expect(narration).toBeVisible();
+    await expect(narration).toContainText("朗讀");
+    await narration.click();
+    await expect.poll(() => methods.includes("requestReadAloud")).toBe(true);
+    await expect(page.locator(".read-aloud-toast")).toBeVisible();
+    await expect(page.locator(".xterm-pane-frame")).toHaveCount(1);
+    expect(methods).not.toContain("closeTile");
   } finally {
     await context.close();
   }
@@ -268,7 +339,7 @@ test("phone portrait-landscape-portrait keeps one selected remote terminal", asy
       await expect(page.locator("header.mobile-dock-bar")).toBeVisible();
       await expect(page.locator(".xterm-pane-frame")).toHaveCount(1);
       await expect(page.locator(".dock-row-group")).toHaveCount(0);
-      await expect(page.locator(".xterm-id-label")).toContainText(`#${terminalIds[1]!.slice(-6)}`);
+      await expect(page.locator(".xterm-pane-frame")).toHaveAttribute("data-terminal-id", terminalIds[1]!);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     };
 
@@ -364,8 +435,8 @@ test("phone shows the provider-authored Codex summary in PTY bar and pane header
   try {
     await page.goto(baseUrl);
     await page.locator(".boot-screen").waitFor({ state: "detached" });
-    await expect(page.locator(".mobile-session-summary")).toContainText("Investigate mobile PTY horizontal pan");
-    await expect(page.locator(".xterm-agent-label")).toContainText("Investigate mobile PTY horizontal pan");
+    await expect(page.locator(".mobile-session-summary")).toContainText(providerSummary);
+    await expect(page.locator(".xterm-agent-label")).toContainText(providerSummary);
   } finally {
     await context.close();
   }

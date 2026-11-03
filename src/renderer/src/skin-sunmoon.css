@@ -622,7 +622,7 @@
 
 :root[data-skin="sunmoon"] .xterm-pane-frame,
 :root[data-skin="sunmoon"] .terminal-first .xterm-pane-frame {
-  grid-template-rows: 32px minmax(0, 1fr);
+  grid-template-rows: var(--pane-header-h, 32px) minmax(0, 1fr);
   border-color: transparent;
   border-radius: 14px;
   background: var(--sm-card);

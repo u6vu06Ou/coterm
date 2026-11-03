@@ -4227,18 +4227,8 @@ function XtermPane({
           {modelLabel}
         </span>
         {/* maintainer 2026-09-30：不再顯示 PTY 頂端的 context 電池；元件與資料通道保留，需要時把這行加回 */}
-        {/* Desktop keeps the id inside the ⋯ menu (2026-10-03 header re-layout);
-            a phone has no menu, so the id stays inline there. */}
-        {isMobileLayout && (
-          <span className="xterm-id-label" title={t("dock.session.title", { id: info.id })}>
-            #{info.id.slice(-6)}
-          </span>
-        )}
-        {/* 朗讀 (2026-10-30 maintainer): one button per agent pane — desktop AND
-            phone (the phone shows only the selected pane, so this header is
-            where the driving user reaches it). Speaks what the agent did
-            since the user's last prompt; press again while playing = stop. */}
-        {info.isAgent && (
+        {/* Mobile narration lives in the PTY tools menu, away from Close. */}
+        {info.isAgent && !isMobileLayout && (
           <button
             data-action-id="terminal.read-aloud.toggle"
             type="button"
