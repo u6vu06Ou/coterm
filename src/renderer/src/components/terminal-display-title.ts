@@ -1,11 +1,11 @@
 import type { TerminalInfo, AgentApiSessionSemanticState } from "@shared/types";
-import { isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
+import { cleanSessionTitle, isJunkSessionTitle, isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
 
-// Placeholder rules (provider title markers, not summaries) live in
-// @shared/terminal so main's applyTitleToInfo / toast title, which need the
-// same answer, cannot drift from the renderer. Re-exported for existing
-// renderer call sites and tests.
-export { isPlaceholderSessionTitle };
+// Placeholder/junk rules (provider markers, status-line and separator chrome)
+// live in @shared/terminal so main's applyTitleToInfo / toast title, which
+// need the same answer, cannot drift from the renderer. Re-exported for
+// existing renderer call sites and tests.
+export { isPlaceholderSessionTitle, isJunkSessionTitle, cleanSessionTitle };
 
 type DisplayTitleInfo = Pick<TerminalInfo, "isAgent" | "profile" | "cwd" | "title" | "agentSummaryTitle">
   & { agentProfile?: TerminalInfo["agentProfile"] };
@@ -118,9 +118,17 @@ export function resolveDisplayTitle(
   // Codex's state DB title is authoritative: its OSC title normally stays at
   // the cwd basename, while this field updates when Codex generates/renames
   // the task summary after the first prompt.
-  return [info.agentSummaryTitle, sessionTitle, info.title].find((title) =>
-    Boolean(title && title !== shellDefault && title !== base && !isPlaceholderSessionTitle(title) && !shellExecutableName(title)),
-  ) ?? null;
+  // cleanSessionTitle strips spinner/marker frames ("✳ …", braille) and
+  // refuses placeholders plus terminal chrome (status-line / hook text,
+  // separator rules) for every candidate, so the same resolved text is what
+  // the header, the top-bar tab and the sidebar row all show.
+  for (const candidate of [info.agentSummaryTitle, sessionTitle, info.title]) {
+    const cleaned = cleanSessionTitle(candidate);
+    if (!cleaned) continue;
+    if (cleaned === shellDefault || cleaned === base || shellExecutableName(cleaned)) continue;
+    return cleaned;
+  }
+  return null;
 }
 
 /** Prefer the task currently being worked on, then the latest completed turn. */
@@ -130,7 +138,13 @@ export function resolveSemanticSessionSummary(
   const value = state?.task.summary ?? state?.lastTurn.summary ?? null;
   if (!value) return null;
   const compact = value.replace(/\s+/g, " ").trim();
-  return compact ? compact.slice(0, 180) : null;
+  // The projection's screen fallback can hold the CLI's status line or a TUI
+  // separator rule; those are chrome, never the session summary. Clean BEFORE
+  // the length cap so a separator-heavy prefix cannot sneak through the slice.
+  const cleaned = cleanSessionTitle(compact);
+  if (!cleaned) return null;
+  const sliced = cleaned.slice(0, 180);
+  return isJunkSessionTitle(sliced) ? null : sliced;
 }
 
 /**

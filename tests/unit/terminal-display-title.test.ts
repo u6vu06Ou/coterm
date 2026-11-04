@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cwdBasename, isPlaceholderSessionTitle, marqueeDurationSeconds, resolveDisplayTitle, resolvePaneDisplayTitle, resolveSemanticSessionSummary, shouldMarqueeSessionSummary, shortCwd, tabDisplayMode } from "../../src/renderer/src/components/terminal-display-title";
+import { cleanSessionTitle, cwdBasename, isJunkSessionTitle, isPlaceholderSessionTitle, marqueeDurationSeconds, resolveDisplayTitle, resolvePaneDisplayTitle, resolveSemanticSessionSummary, shouldMarqueeSessionSummary, shortCwd, tabDisplayMode } from "../../src/renderer/src/components/terminal-display-title";
 
 const agentInfo = { isAgent: true, profile: "pwsh", cwd: "D:\\workspace\\sync_party", title: "sync_party" } as const;
 
@@ -26,6 +26,57 @@ describe("isPlaceholderSessionTitle", () => {
   // be the summary — the same rule the cwd-basename filter already applies.
   it("is case-insensitive on purpose", () => {
     expect(isPlaceholderSessionTitle("cLaUdE")).toBe(true);
+  });
+});
+
+describe("isJunkSessionTitle", () => {
+  it("rejects status-line / hook chrome", () => {
+    expect(isJunkSessionTitle("⚠parallel-guard: agents 2/20 (all sessions)…")).toBe(true);
+    expect(isJunkSessionTitle("⚠ team-guard: spawn denied")).toBe(true);
+    expect(isJunkSessionTitle("parallel-guard: agents 0/20")).toBe(true);
+    expect(isJunkSessionTitle("team-guard: busy")).toBe(true);
+  });
+
+  it("rejects separator rules and pure decoration", () => {
+    expect(isJunkSessionTitle("─".repeat(24))).toBe(true);
+    expect(isJunkSessionTitle("—".repeat(40) + "…")).toBe(true);
+    expect(isJunkSessionTitle("═══════")).toBe(true);
+    expect(isJunkSessionTitle("* * *")).toBe(true);
+    expect(isJunkSessionTitle("────────── done ──────────")).toBe(true); // separator-majority
+    expect(isJunkSessionTitle("── note ──")).toBe(true); // spaces join the runs: rule with a label is still a rule
+    expect(isJunkSessionTitle("──── 80% ────")).toBe(true);
+  });
+
+  it("does not shoot down short real titles over a couple of separator chars", () => {
+    // Below the minimum length, or with dots/underscores (not separators):
+    // "__init__", "a==b", "Fix..." must all keep passing.
+    expect(isJunkSessionTitle("a==b")).toBe(false);
+    expect(isJunkSessionTitle("__init__")).toBe(false);
+    expect(isJunkSessionTitle("Fix...")).toBe(false);
+    expect(isJunkSessionTitle("Fix team-guard: allow concurrent runs")).toBe(false);
+  });
+
+  it("rejects placeholders and empties, keeps real summaries", () => {
+    expect(isJunkSessionTitle("◐ Claude Code")).toBe(true);
+    expect(isJunkSessionTitle("claude")).toBe(true);
+    expect(isJunkSessionTitle("")).toBe(true);
+    expect(isJunkSessionTitle(null)).toBe(true);
+    expect(isJunkSessionTitle("本地的翻譯 app (meet-translator) 現在可以用了")).toBe(false);
+    expect(isJunkSessionTitle("Fixing auth bug in login.ts")).toBe(false);
+    // A guard NAME mentioned in prose is fine — only the "name:" status form is junk.
+    expect(isJunkSessionTitle("修 team-guard 擋下 spawn 的誤判")).toBe(false);
+  });
+});
+
+describe("cleanSessionTitle", () => {
+  it("strips spinner/marker frames and refuses junk", () => {
+    expect(cleanSessionTitle("✳ 本地的翻譯 app")).toBe("本地的翻譯 app");
+    expect(cleanSessionTitle("✳ ✳ Fixing")).toBe("Fixing"); // repeated marker frames strip in one pass
+    expect(cleanSessionTitle("⠂ Fixing the pane header")).toBe("Fixing the pane header");
+    expect(cleanSessionTitle("◐ Claude Code")).toBe(null);
+    expect(cleanSessionTitle("⚠parallel-guard: agents 2/20")).toBe(null);
+    expect(cleanSessionTitle("─".repeat(12))).toBe(null);
+    expect(cleanSessionTitle(null)).toBe(null);
   });
 });
 
@@ -100,6 +151,29 @@ describe("resolveDisplayTitle", () => {
     expect(resolveDisplayTitle({ ...agentInfo, isAgent: false, title: "Real" }, null)).toBe(null);
     expect(resolveDisplayTitle({ ...agentInfo, profile: "pwsh", title: "PowerShell" }, null)).toBe(null);
   });
+
+  // 2026-11-04 regression: Claude Code's status line and TUI separator rules
+  // used to be accepted as the session summary.
+  it("rejects status-line text and separator rules from every candidate", () => {
+    const junk = "⚠parallel-guard: agents 2/20 (all sessions)…";
+    expect(resolveDisplayTitle({ ...agentInfo, title: junk }, null)).toBe(null);
+    expect(resolveDisplayTitle({ ...agentInfo, title: "─".repeat(30) }, null)).toBe(null);
+    // Junk from the live stream must not shadow a good persisted title.
+    expect(resolveDisplayTitle({ ...agentInfo, title: "Real summary" }, junk)).toBe("Real summary");
+    // …and junk NEVER passes through even when nothing else exists.
+    expect(resolveDisplayTitle({ ...agentInfo, title: "sync_party" }, "─".repeat(10))).toBe(null);
+  });
+
+  it("accepts a real Claude Code OSC summary for claude and claude-team panes", () => {
+    const summary = "✳ 本地的翻譯 app (meet-translator) 現在可以用了";
+    const claude = { ...agentInfo, agentProfile: "claude-official" as const, title: "PowerShell" };
+    const team = { ...agentInfo, agentProfile: "claude-team" as const, title: "PowerShell" };
+    // Marker glyph is stripped before display.
+    expect(resolveDisplayTitle(claude, summary)).toBe("本地的翻譯 app (meet-translator) 現在可以用了");
+    expect(resolveDisplayTitle(team, summary)).toBe("本地的翻譯 app (meet-translator) 現在可以用了");
+    expect(resolvePaneDisplayTitle(team, summary, "semantic fallback"))
+      .toBe("本地的翻譯 app (meet-translator) 現在可以用了");
+  });
 });
 
 describe("resolvePaneDisplayTitle", () => {
@@ -153,6 +227,29 @@ describe("resolvePaneDisplayTitle", () => {
       .toBe("修正 claude-team 表頭摘要");
     // A real Claude OSC work summary still wins when one does arrive.
     expect(resolveDisplayTitle(team, "Fixing the pane header summary")).toBe("Fixing the pane header summary");
+  });
+});
+
+describe("resolveSemanticSessionSummary junk guard", () => {
+  const stateWith = (task: string | null, lastTurn: string | null) => ({
+    terminalId: "t1",
+    identity: { harness: "claude-code" as const, backend: "anthropic" as const, model: null, profile: "claude-team" },
+    task: { summary: task, phase: "running", source: "screen-fallback" as const, confidence: 0.45 },
+    lastTurn: { status: "completed" as const, summary: lastTurn, finalText: null, completedAt: null, source: "screen-fallback" as const, confidence: 0.5 },
+    pendingInteraction: null,
+    updatedAt: "2026-11-04T00:00:00.000Z",
+  });
+
+  it("rejects the screen-fallback status line and separator rules", () => {
+    expect(resolveSemanticSessionSummary(stateWith("⚠parallel-guard: agents 2/20 (all sessions)…", null))).toBe(null);
+    expect(resolveSemanticSessionSummary(stateWith("─".repeat(30), null))).toBe(null);
+    // A junk task summary falls through to a real last-turn summary.
+    expect(resolveSemanticSessionSummary(stateWith(null, "⚠ team-guard: busy"))).toBe(null);
+  });
+
+  it("keeps a real screen-derived summary", () => {
+    expect(resolveSemanticSessionSummary(stateWith("修正 claude-team 表頭摘要", null)))
+      .toBe("修正 claude-team 表頭摘要");
   });
 });
 

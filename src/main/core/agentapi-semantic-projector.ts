@@ -10,6 +10,7 @@ import type {
   AgentApiSemanticSource,
   AgentApiSessionWorldState,
 } from "@shared/types";
+import { isJunkSessionTitle } from "@shared/terminal";
 import { redactEgress } from "../security/redaction";
 import type { AppEventBus } from "./event-bus";
 import type { PendingInteractionStore } from "./agentapi-pending-interaction-store";
@@ -466,9 +467,15 @@ function summarizeScreenText(text: string): string {
     .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
     .split(/\r?\n/)
     .map((line) => line.trim())
-    .filter(Boolean);
+    // A TUI screen's chrome — the status line / hook output
+    // ("⚠parallel-guard: agents 2/20 …") and separator rules ("——————…") —
+    // is not session content; drop those lines before picking the tail lines
+    // so the projection never reads junk as the summary.
+    .filter((line) => !isJunkSessionTitle(line));
   if (lines.length === 0) return "";
-  return summarizeText(lines.slice(-3).join(" "));
+  const summary = summarizeText(lines.slice(-3).join(" "));
+  // Defense in depth: the joined tail must still read like a summary.
+  return isJunkSessionTitle(summary) ? "" : summary;
 }
 
 function summarizeText(text: string): string {

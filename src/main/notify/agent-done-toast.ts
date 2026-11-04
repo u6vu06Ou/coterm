@@ -44,7 +44,7 @@
 //   two-word body. No PTY output, no prompt, nothing that crossed the screen.
 
 import type { AppEventBus } from "../core/event-bus";
-import { isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
+import { cleanSessionTitle, shellTitle } from "@shared/terminal";
 import { isAttentionState, isAgentWorking } from "@shared/pty-state";
 import type { PtyState } from "@shared/schema";
 import type { PtyStateChanged, TerminalInfo } from "@shared/types";
@@ -235,16 +235,17 @@ export function agentToastTitle(info: ToastTitleInfo | null): string | null {
   if (info.isAgent) {
     const shellDefault = shellTitle(info.profile);
     title =
-      [info.agentSummaryTitle, info.title].find(
-        (candidate) =>
-          Boolean(
-            candidate &&
-            candidate !== shellDefault &&
-            candidate !== base &&
-            !isPlaceholderSessionTitle(candidate) &&
-            !shellExecutableName(candidate),
-          ),
-      ) ?? null;
+      [info.agentSummaryTitle, info.title]
+        .map((candidate) => cleanSessionTitle(candidate))
+        .find(
+          (cleaned) =>
+            Boolean(
+              cleaned &&
+              cleaned !== shellDefault &&
+              cleaned !== base &&
+              !shellExecutableName(cleaned),
+            ),
+        ) ?? null;
   }
   if (!title) title = base;
   if (!title) return null;

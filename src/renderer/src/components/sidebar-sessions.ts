@@ -1,7 +1,7 @@
 import type { ProjectHistorySession } from "@shared/types";
 import { useAppStore } from "../store/app-store";
 import { canResumeProfile } from "./interactive-agent";
-import { shellExecutableName } from "./terminal-display-title";
+import { cleanSessionTitle, shellExecutableName } from "./terminal-display-title";
 
 /**
  * f2 側欄 session 分支（1.5.46, next-rev board）:
@@ -37,17 +37,21 @@ export function isTransientWorkingTitle(title: string | null | undefined): boole
 
 /**
  * SIDEBAR title resolution: prefer the pane header's real summary, then any
- * non-spinner OSC title, then cwd. A transient "Working"/"Thinking" label is
- * deliberately never persisted as a name; the status lamp is separate.
+ * usable OSC title, then cwd. Both sources pass through the SAME
+ * cleanSessionTitle guard the pane header uses, so the sidebar row and the
+ * header can never disagree on what counts as a summary — status-line / hook
+ * text, separator rules and provider placeholders fall through to cwd instead
+ * of being persisted as a session name. A transient "Working"/"Thinking"
+ * label is deliberately never persisted either; the status lamp is separate.
  */
 export function openTileDisplayTitle(
   meta: { title: string; cwd: string } | undefined,
   summary: string | null | undefined,
   terminalId: string,
 ): string {
-  const summaryText = summary?.trim();
+  const summaryText = cleanSessionTitle(summary);
   if (summaryText && !isTransientWorkingTitle(summaryText)) return summaryText;
-  const title = meta?.title?.trim();
+  const title = cleanSessionTitle(meta?.title);
   if (title && !isTransientWorkingTitle(title)) return shellExecutableName(title) ?? title;
   const base = (meta?.cwd ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).pop();
   return base || `pty ${terminalId.slice(-4)}`;

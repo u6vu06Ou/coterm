@@ -69,6 +69,37 @@ describe("open tile display title", () => {
   });
 });
 
+describe("open tile display title — junk guard (header/sidebar parity)", () => {
+  const statusLine = "⚠parallel-guard: agents 2/20 (all sessions)…";
+  const separator = "─".repeat(40) + "…";
+
+  it("never shows status-line text or a separator rule as the row name", () => {
+    // Junk in the pane-header summary event AND in the raw OSC title must both
+    // fall through to the cwd basename — never to the junk.
+    expect(openTileDisplayTitle({ title: statusLine, cwd: "D:/project" }, statusLine, "t-1")).toBe("project");
+    expect(openTileDisplayTitle({ title: separator, cwd: "D:/project" }, null, "t-1")).toBe("project");
+    expect(openTileDisplayTitle({ title: separator, cwd: "D:/project" }, separator, "t-1")).toBe("project");
+  });
+
+  it("resolves the same summary the pane header resolved (claude and claude-team)", () => {
+    // The header strips the ✳ marker before dispatching coterm:session-summary;
+    // the sidebar must show exactly that text, not re-derive something else.
+    const headerSummary = "本地的翻譯 app (meet-translator) 現在可以用了";
+    expect(openTileDisplayTitle({ title: "claude", cwd: "D:/project" }, headerSummary, "t-1")).toBe(headerSummary);
+    expect(openTileDisplayTitle({ title: "PowerShell", cwd: "D:/project" }, headerSummary, "t-1")).toBe(headerSummary);
+    // If the event is missing but the OSC title is real, the sidebar still
+    // matches what the header's info.title fallback would show.
+    expect(openTileDisplayTitle({ title: "Fixing auth bug", cwd: "D:/project" }, null, "t-1")).toBe("Fixing auth bug");
+    // A marker-prefixed OSC title is shown stripped, same as the header.
+    expect(openTileDisplayTitle({ title: "✳ Fixing auth bug", cwd: "D:/project" }, null, "t-1")).toBe("Fixing auth bug");
+  });
+
+  it("provider placeholders fall through to cwd instead of persisting as the name", () => {
+    expect(openTileDisplayTitle({ title: "◐ Claude Code", cwd: "D:/project" }, null, "t-1")).toBe("project");
+    expect(openTileDisplayTitle({ title: "claude", cwd: "D:/project" }, null, "t-1")).toBe("project");
+  });
+});
+
 describe("drag payload parsing", () => {
   it("round-trips a single session payload", () => {
     const payload = { projectId: "p", profileId: "claude-local-main", nativeSessionId: "s" };

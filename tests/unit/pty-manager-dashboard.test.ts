@@ -89,6 +89,24 @@ describe("applyTitleToInfo", () => {
     expect(applyTitleToInfo(withSummary, "claude").title).toBe("Fixing the pane header summary");
   });
 
+  it("never stores status-line / hook chrome or separator rules as the title", () => {
+    // 2026-11-04 regression: these reached info.title through the OSC parser and
+    // showed up as the pane header + sidebar "summary".
+    expect(applyTitleToInfo(baseInfo, "⚠parallel-guard: agents 2/20 (all sessions)…")).toBe(baseInfo);
+    expect(applyTitleToInfo(baseInfo, "─".repeat(40))).toBe(baseInfo);
+    expect(applyTitleToInfo(baseInfo, "team-guard: busy")).toBe(baseInfo);
+    // A stored real summary survives a later junk frame.
+    const withSummary = applyTitleToInfo(baseInfo, "本地的翻譯 app");
+    expect(applyTitleToInfo(withSummary, "⚠parallel-guard: agents 0/20").title).toBe("本地的翻譯 app");
+  });
+
+  it("strips the ✳ marker frame and stores the text behind it", () => {
+    // Claude Code's OSC summary arrives spinner-framed ("✳ …"); the header and
+    // the sidebar both show the stripped text.
+    expect(applyTitleToInfo(baseInfo, "✳ Fixing the pane header summary").title)
+      .toBe("Fixing the pane header summary");
+  });
+
   it("updates title when title changes across turns", () => {
     const first = applyTitleToInfo(baseInfo, "Task A");
     const second = applyTitleToInfo(first, "Task B");

@@ -40,6 +40,64 @@ export function isPlaceholderSessionTitle(title: string | null | undefined): boo
   return bare === "" || bare === "claudecode" || bare === "claude" || bare === "claude.cmd" || bare === "claude.exe";
 }
 
+// Spinner/marker glyphs the CLIs prepend to the OSC title while a task runs
+// ("✳ Fixing the pane", braille "⠂ …", "◐ …") — one frame per tick. The text
+// behind the marker is the real summary; the marker itself is not.
+// Repeated marker runs ("✳ ✳ Fixing") strip in one pass.
+const LEADING_TITLE_MARKER_RUN = /^(?:[⠀-⣿✳✱✲❋◐◑◒◓●]+\s*)+/u;
+
+// Characters a TUI rule/separator line is made of (box-drawing, dashes,
+// repeat bullets). Whitespace joins the runs for counting. "." and "_" are
+// deliberately NOT separators — short real labels like "__init__" or "Fix..."
+// must not trip the majority rule.
+const SEPARATOR_CHARS = new Set(("─━┄┅┈┉╌╍═║│┃|—–-‐=*~·•∙ " + "　").split(""));
+const SEPARATOR_MAJORITY_MIN_LENGTH = 6;
+
+/**
+ * A candidate session summary that is actually terminal chrome — hook or
+ * status-line output ("⚠parallel-guard: agents 2/20 (all sessions)…"), a TUI
+ * separator rule ("——————…"), a provider placeholder, or an empty string.
+ * Such text must never become the pane header / sidebar session name: it used
+ * to flow in through the screen-text fallback when a pane had no real OSC
+ * summary yet (claude-team especially), which is the 2026-11-04 junk-title
+ * regression. Shared so main (pty-manager, semantic projector, toast) and the
+ * renderer (header resolver, sidebar) all reject the same set.
+ */
+export function isJunkSessionTitle(title: string | null | undefined): boolean {
+  const trimmed = title?.trim() ?? "";
+  if (!trimmed) return true;
+  if (isPlaceholderSessionTitle(trimmed)) return true;
+  // Status-line / hook chatter is the CLI's own chrome, never a summary. The
+  // guard-name check is anchored at the start so a summary merely MENTIONING
+  // "team-guard:" in prose still passes.
+  if (trimmed.startsWith("⚠")) return true;
+  if (/^⚠?\s*(?:parallel|team)-guard:/iu.test(trimmed)) return true;
+  // No letters or digits at all (CJK glyphs count as letters): a separator
+  // rule or pure decoration.
+  if (!/[\p{L}\p{N}]/u.test(trimmed)) return true;
+  // Separator-majority text ("── note ──", "──── 80% ────"): a rule with a
+  // small label is still a rule. Below the minimum length, short real titles
+  // ("a==b") are left alone.
+  const chars = [...trimmed];
+  if (chars.length >= SEPARATOR_MAJORITY_MIN_LENGTH) {
+    const separators = chars.filter((ch) => SEPARATOR_CHARS.has(ch)).length;
+    if (separators * 2 >= chars.length) return true;
+  }
+  return false;
+}
+
+/**
+ * Normalize a candidate session title for storage/display: strips the
+ * spinner/marker frame prefix, then refuses provider placeholders and terminal
+ * chrome. Returns null when nothing usable remains — callers then fall back
+ * to cwd / blank instead of ever showing junk.
+ */
+export function cleanSessionTitle(title: string | null | undefined): string | null {
+  const stripped = title?.trim().replace(LEADING_TITLE_MARKER_RUN, "").trim() ?? "";
+  if (!stripped) return null;
+  return isJunkSessionTitle(stripped) ? null : stripped;
+}
+
 export function quoteTerminalPath(
   inputPath: string,
   profile: TerminalCreateInput["profile"],

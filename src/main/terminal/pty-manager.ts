@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AgentStateExplanation, CommandResult, TerminalCreateInput, TerminalInfo, TerminalLabel, PtyState, PtyStateSource, PtyStateChanged } from "@shared/types";
 import { agentStateExplanationSchema, commandResultSchema } from "@shared/schema";
 import type { ScrollbackMode } from "@shared/schema";
-import { isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
+import { cleanSessionTitle, shellTitle } from "@shared/terminal";
 import { canTransitionTo, isAttentionState, ptyStateSourceAuthority, toLegacyPtyState, type LegacyPtyState } from "@shared/pty-state";
 import type { AppEventBus } from "../core/event-bus";
 import { createId } from "../core/ids";
@@ -177,20 +177,19 @@ const AGENT_QUIET_MS = 2_500;
  * titles are ignored. Exported for unit testing.
  */
 export function applyTitleToInfo(info: TerminalInfo, title: string): TerminalInfo {
-  // Strip rotating braille spinner prefixes (Codex/LLM CLIs prepend one per
-  // frame at ~10Hz) before comparing/storing, so every frame collapses to the
-  // same title and cannot loop terminalListChanged -> workspace re-fetch.
-  const trimmed = title.trim().replace(/^[\u2800-\u28ff]+\s*/, "");
-  if (!trimmed) return info;
-  if (trimmed === info.title) return info;
-  if (trimmed === shellTitle(info.profile)) return info;
-  // Claude Code briefly advertises "◐ Claude Code" before the actual task
-  // summary arrives, and the npm `claude` shim stamps a bare "claude" as the
-  // window title on launch. Both are provider markers, not the summary the PTY
-  // header is meant to show — refusing them here keeps info.title honest so
-  // the renderer's fallback chain never settles on "claude".
-  if (isPlaceholderSessionTitle(trimmed)) return info;
-  return { ...info, title: trimmed };
+  // cleanSessionTitle strips rotating spinner/marker prefixes (Codex/LLM CLIs
+  // prepend one per frame at ~10Hz) before comparing/storing, so every frame
+  // collapses to the same title and cannot loop terminalListChanged ->
+  // workspace re-fetch. It also refuses provider placeholders ("Claude Code",
+  // the npm shim's bare "claude") and terminal chrome (status-line / hook
+  // text, TUI separator rules). None of those are the summary the PTY header
+  // is meant to show; refusing them here keeps info.title honest so the
+  // renderer's fallback chain never settles on junk.
+  const cleaned = cleanSessionTitle(title);
+  if (!cleaned) return info;
+  if (cleaned === info.title) return info;
+  if (cleaned === shellTitle(info.profile)) return info;
+  return { ...info, title: cleaned };
 }
 
 /**
