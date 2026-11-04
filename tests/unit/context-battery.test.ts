@@ -326,6 +326,80 @@ describe("ContextBatteryMonitor Claude recap producer", () => {
   });
 });
 
+describe("ContextBatteryMonitor claude transcript header summary", () => {
+  const claudeSummaryFixture = async (
+    lines: unknown[],
+    snapshot: { title?: string } = {},
+  ): Promise<{ titleCalls: Array<[string, string | null]> }> => {
+    const projectsRoot = await mkdtemp(join(tmpdir(), "coterm-claude-summary-title-"));
+    const cwd = "D:\\repo";
+    const projectDir = join(projectsRoot, mungeCwd(cwd));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(join(projectDir, "session-title.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+    const terminals = fakeTerminals([{
+      id: "claude-title",
+      agentProfile: "claude-team",
+      cwd,
+      nativeSessionId: "session-title",
+      startedAt: new Date().toISOString(),
+      title: snapshot.title ?? "PowerShell",
+    }]);
+    try {
+      const monitor = new ContextBatteryMonitor({
+        terminals,
+        projectsRoot,
+        codexSessionsRoot: join(tmpdir(), "no-codex"),
+        intervalMs: 60_000,
+      });
+      await (monitor as unknown as { tick: () => Promise<void> }).tick();
+      return terminals;
+    } finally {
+      await rm(projectsRoot, { recursive: true, force: true });
+    }
+  };
+
+  // 2026-11-04 claude-team bug: the CLI's auto title call dies silently on the
+  // free proxy, so no ai-title and no real OSC title ever arrive; the pane
+  // header fell through to Claude Code's status line. The transcript already
+  // holds usable summary material — publish it into agentSummaryTitle.
+  it("publishes the ai-title from the transcript when the native title is unusable", async () => {
+    const terminals = await claudeSummaryFixture([
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "第一個 prompt" }] } },
+      { type: "ai-title", aiTitle: "GitHub 最新版安裝驗證" },
+    ]);
+    expect(terminals.titleCalls).toEqual([["claude-title", "GitHub 最新版安裝驗證"]]);
+  });
+
+  it("falls back to the recap with the opt-out footer stripped", async () => {
+    const terminals = await claudeSummaryFixture([
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "第一個 prompt" }] } },
+      { type: "system", subtype: "away_summary", content: "正在重新打包，跑完會給你下載網址。 (disable recaps in /config)" },
+    ]);
+    expect(terminals.titleCalls).toEqual([["claude-title", "正在重新打包，跑完會給你下載網址。"]]);
+  });
+
+  it("falls back to the latest real user prompt, skipping tool results and reminders", async () => {
+    // Mirrors 036acb27-…jsonl: a real first prompt, then only tool results /
+    // system-reminders / task notifications — the FIRST prompt stays the
+    // latest real one.
+    const terminals = await claudeSummaryFixture([
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "使用claude team能力。側欄跳出來的時候會連帶更動視窗大小" }] } },
+      { type: "user", toolUseResult: "ok", message: { role: "user", content: [{ type: "tool_result", content: "ok" }] } },
+      { type: "user", isMeta: true, message: { role: "user", content: [{ type: "text", text: "<system-reminder>x</system-reminder>" }] } },
+      { type: "user", message: { role: "user", content: [{ type: "text", text: "<task-notification>done</task-notification>" }] } },
+    ]);
+    expect(terminals.titleCalls).toEqual([["claude-title", "使用claude team能力。側欄跳出來的時候會連帶更動視窗大小"]]);
+  });
+
+  it("never publishes a transcript summary over a usable native OSC title", async () => {
+    const terminals = await claudeSummaryFixture(
+      [{ type: "ai-title", aiTitle: "Transcript title" }],
+      { title: "Fixing the IME scroll lock" },
+    );
+    expect(terminals.titleCalls).toHaveLength(0);
+  });
+});
+
 describe("ContextBatteryMonitor claude meter gate (measureOne)", () => {
   const claudeSessionWithUsage = async (
     projectsRoot: string,
@@ -721,6 +795,8 @@ function fakeTerminals(snapshot: Array<{
   cwd: string;
   nativeSessionId: string | null;
   startedAt: string;
+  /** Defaults to "t" (a usable native title); pass "PowerShell" for the placeholder case. */
+  title?: string;
 }>): Pick<PtyManager, "dashboardSnapshot" | "setContextUsage" | "setAgentSummaryTitle" | "setAgentRecap"> & {
   calls: Array<[string, number]>;
   usageCalls: Array<[string, number, number | null, number | null, string | null]>;
@@ -735,7 +811,7 @@ function fakeTerminals(snapshot: Array<{
     dashboardSnapshot: () =>
       snapshot.map((s) => ({
         info: {
-          id: s.id, projectId: "p", profile: "pwsh", title: "t", cwd: s.cwd,
+          id: s.id, projectId: "p", profile: "pwsh", title: s.title ?? "t", cwd: s.cwd,
           cols: 100, rows: 28, status: "running",
           startedAt: s.startedAt, closedAt: null, lastExitCode: null,
           isAgent: true, agentProfile: s.agentProfile, ownedByAgentApi: false,

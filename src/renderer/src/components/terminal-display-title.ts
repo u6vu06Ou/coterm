@@ -1,5 +1,13 @@
 import type { TerminalInfo, AgentApiSessionSemanticState } from "@shared/types";
-import { cleanSessionTitle, isJunkSessionTitle, isPlaceholderSessionTitle, shellTitle } from "@shared/terminal";
+import {
+  cleanSessionTitle,
+  cwdBasename as sharedCwdBasename,
+  isJunkSessionTitle,
+  isPlaceholderSessionTitle,
+  isUsableNativeSessionTitle,
+  shellExecutableName as sharedShellExecutableName,
+  shellTitle,
+} from "@shared/terminal";
 
 // Placeholder/junk rules (provider markers, status-line and separator chrome)
 // live in @shared/terminal so main's applyTitleToInfo / toast title, which
@@ -47,23 +55,11 @@ export function marqueeDurationSeconds(overflowPx: number, fontPx = 13): number 
   return Math.min(MAX_SECONDS, Math.max(MIN_SECONDS, Math.round(moving / 0.84 + 0.5)));
 }
 
-export function cwdBasename(cwd: string | null | undefined): string | null {
-  if (!cwd) return null;
-  return cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null;
-}
-
-/**
- * After an agent exits, pwsh/cmd put their own executable path in the window
- * title ("C:\Program Files\WindowsApps\Microsoft.PowerShell_7…\pwsh.exe").
- * That is not a summary — return the bare program name ("pwsh") instead.
- */
-export function shellExecutableName(title: string | null | undefined): string | null {
-  const trimmed = title?.trim();
-  if (!trimmed || !/^(?:[a-z]:)?[\\/]/i.test(trimmed)) return null;
-  const leaf = trimmed.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-  if (!/\.exe$/i.test(leaf) && !/^(?:pwsh|powershell|cmd|bash|wsl)$/i.test(leaf)) return null;
-  return leaf.replace(/\.exe$/i, "") || null;
-}
+// Implementations moved to @shared/terminal (main's context-meter applies the
+// exact same native-title usability rule before publishing a transcript-derived
+// summary). Re-exported so existing renderer call sites and tests keep working.
+export const cwdBasename = sharedCwdBasename;
+export const shellExecutableName = sharedShellExecutableName;
 
 /**
  * Short cwd for the top-bar browser tabs: the leaf segment prefixed with its
@@ -107,7 +103,6 @@ export function resolveDisplayTitle(
 ): string | null {
   if (!info.isAgent) return null;
   const shellDefault = shellTitle(info.profile);
-  const base = cwdBasename(info.cwd);
   // No provider-specific early return here. v1.5.19 added one that accepted
   // ONLY agentSummaryTitle for claude-*/codex-*, which silently blanked the
   // header for every Claude pane (Claude Code publishes its work summary
@@ -123,10 +118,10 @@ export function resolveDisplayTitle(
   // separator rules) for every candidate, so the same resolved text is what
   // the header, the top-bar tab and the sidebar row all show.
   for (const candidate of [info.agentSummaryTitle, sessionTitle, info.title]) {
+    // Same shared usability rule main applies before publishing a summary.
+    if (!isUsableNativeSessionTitle(candidate, shellDefault, info.cwd)) continue;
     const cleaned = cleanSessionTitle(candidate);
-    if (!cleaned) continue;
-    if (cleaned === shellDefault || cleaned === base || shellExecutableName(cleaned)) continue;
-    return cleaned;
+    if (cleaned) return cleaned;
   }
   return null;
 }

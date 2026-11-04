@@ -148,6 +148,64 @@ describe("transcript / PTY fallback", () => {
     ctx.projector.dispose();
   });
 
+  it("never projects Claude Code's status line as the summary for a resolved claude transcript", async () => {
+    // 2026-11-04 claude-team regression: the CLI's auto title call dies on the
+    // free proxy, no ai-title is written, and the screen fallback pasted the
+    // status line into the pane header. With a RESOLVED claude/codex
+    // transcript the screen is chrome and must not produce a summary at all.
+    const ctx = setup(world({ agentProfile: "claude-team", displayState: "running", canonicalState: "running" }));
+    ctx.getTranscript.mockResolvedValueOnce({
+      terminalId: TID,
+      provider: "claude",
+      status: "ready",
+      messages: [{ role: "user", kind: "message", text: "使用 claude team 修正側欄大小問題", timestamp: "2026-08-15T01:00:08.000Z" }],
+    });
+    // The screen carries the exact status-line junk from the bug report.
+    const projector = new AgentSemanticProjector({
+      events: ctx.events,
+      worldState: { getWorldState: () => [world({ agentProfile: "claude-team", displayState: "running" })], onWorldChanged: () => () => {} },
+      semanticStore: ctx.semanticStore,
+      pendingStore: ctx.pendingStore,
+      getTranscript: ctx.getTranscript,
+      getScreenText: () => "Opus 5.5 | .../workspace/3jsfloder | 69k/1000k (7%) | proxy ▸▸ bypass permissions on (shift+tab to cycle)\n● main\n○ beta-mate",
+      now: () => Date.parse("2026-08-15T01:00:10.000Z"),
+    });
+    projector.start();
+    await projector.refreshTranscript(TID);
+    const state = ctx.semanticStore.get(TID);
+    expect(state?.task.summary ?? null).toBeNull();
+    expect(state?.lastTurn.summary ?? null).toBeNull();
+    expect(ctx.pendingStore.getByTerminal(TID)).toBeNull();
+    projector.dispose();
+    ctx.projector.dispose();
+  });
+
+  it("keeps the screen fallback while the claude transcript is not resolvable yet", async () => {
+    // status "pending" = native session id known but the file is not created;
+    // the bounded screen fallback stays the only signal in that window.
+    const ctx = setup(world({ agentProfile: "claude-team", displayState: "running", canonicalState: "running" }));
+    ctx.getTranscript.mockResolvedValueOnce({
+      terminalId: TID,
+      provider: "claude",
+      status: "pending",
+      messages: [],
+    });
+    const projector = new AgentSemanticProjector({
+      events: ctx.events,
+      worldState: { getWorldState: () => [world({ agentProfile: "claude-team", displayState: "running" })], onWorldChanged: () => () => {} },
+      semanticStore: ctx.semanticStore,
+      pendingStore: ctx.pendingStore,
+      getTranscript: ctx.getTranscript,
+      getScreenText: () => "Refactoring the pane header summary pipeline",
+      now: () => Date.parse("2026-08-15T01:00:10.000Z"),
+    });
+    projector.start();
+    await projector.refreshTranscript(TID);
+    expect(ctx.semanticStore.get(TID)?.task.summary).toBe("Refactoring the pane header summary pipeline");
+    projector.dispose();
+    ctx.projector.dispose();
+  });
+
   it("drops a stale async transcript result after terminal exit", async () => {
     let resolveTranscript!: (value: unknown) => void;
     const pending = new Promise((resolve) => { resolveTranscript = resolve; });

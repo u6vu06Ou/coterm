@@ -53,6 +53,30 @@ const LEADING_TITLE_MARKER_RUN = /^(?:[⠀-⣿✳✱✲❋◐◑◒◓●]+\s*)+
 const SEPARATOR_CHARS = new Set(("─━┄┅┈┉╌╍═║│┃|—–-‐=*~·•∙ " + "　").split(""));
 const SEPARATOR_MAJORITY_MIN_LENGTH = 6;
 
+// Claude Code status line / footer phrases. These fragments are emitted only
+// by the CLI's own chrome, so a CONTAINS check is safe: a real work summary
+// never needs "shift+tab to cycle" or the permission-mode banner. (A prose
+// sentence mentioning "permission" alone still passes — the needles are the
+// full chrome phrases.)
+const CLI_CHROME_NEEDLES = [
+  "bypass permissions",
+  "shift+tab to cycle",
+  "esc to interrupt",
+  "? for shortcuts",
+];
+
+// Permission-mode markers from the Claude Code status line ("▸▸ bypass
+// permissions on", "⏵⏵ normal mode") — two or more consecutive marker glyphs.
+const CLI_MODE_MARKER_RUN = /[▸⏵]{2}/u;
+
+// Token-usage segment of the Claude Code status line ("69k/1000k (7%)").
+const CLI_TOKEN_USAGE = /\d+(?:\.\d+)?[km]\s*\/\s*\d+(?:\.\d+)?[km]\s*\(\s*\d+%\s*\)/iu;
+
+// claude-team roster rows: "● main", "○ beta-mate", "○ gamma-mate" — the
+// team list Claude Code draws above the footer. Restricted to the actual
+// roster names so a bullet-pointed real line ("○ 完成度") still passes.
+const CLI_ROSTER_LINE = /^[●○]\s*(?:main|[\p{L}\p{N}][\p{L}\p{N}._-]*-mate)\b/iu;
+
 /**
  * A candidate session summary that is actually terminal chrome — hook or
  * status-line output ("⚠parallel-guard: agents 2/20 (all sessions)…"), a TUI
@@ -72,6 +96,18 @@ export function isJunkSessionTitle(title: string | null | undefined): boolean {
   // "team-guard:" in prose still passes.
   if (trimmed.startsWith("⚠")) return true;
   if (/^⚠?\s*(?:parallel|team)-guard:/iu.test(trimmed)) return true;
+  // Claude Code's status line / footer / claude-team roster are CLI chrome,
+  // never the session summary (the 2026-11-04 claude-team header regression:
+  // with no native ai-title the screen fallback surfaced exactly these lines).
+  const lowered = trimmed.toLowerCase();
+  if (CLI_CHROME_NEEDLES.some((needle) => lowered.includes(needle))) return true;
+  if (CLI_MODE_MARKER_RUN.test(trimmed)) return true;
+  if (CLI_TOKEN_USAGE.test(trimmed)) return true;
+  if (CLI_ROSTER_LINE.test(trimmed)) return true;
+  // Pipe-segmented status line ("Opus 5.5 | …/workspace/3jsfloder | 69k/1000k
+  // (7%) | proxy ▸▸ …"). Two-or-more spaced pipes in one line is a status bar
+  // or a table row, not prose — a real one-line summary never looks like that.
+  if (trimmed.split(/\s\|\s/u).length >= 3) return true;
   // No letters or digits at all (CJK glyphs count as letters): a separator
   // rule or pure decoration.
   if (!/[\p{L}\p{N}]/u.test(trimmed)) return true;
@@ -93,9 +129,55 @@ export function isJunkSessionTitle(title: string | null | undefined): boolean {
  * to cwd / blank instead of ever showing junk.
  */
 export function cleanSessionTitle(title: string | null | undefined): string | null {
-  const stripped = title?.trim().replace(LEADING_TITLE_MARKER_RUN, "").trim() ?? "";
+  const trimmed = title?.trim() ?? "";
+  if (!trimmed) return null;
+  // Junk-check the RAW text first: the marker strip below would turn the
+  // claude-team roster row "● main" into the bare word "main", which is no
+  // longer recognizable as chrome.
+  if (isJunkSessionTitle(trimmed)) return null;
+  const stripped = trimmed.replace(LEADING_TITLE_MARKER_RUN, "").trim();
   if (!stripped) return null;
   return isJunkSessionTitle(stripped) ? null : stripped;
+}
+
+/** Leaf segment of a cwd ("D:\workspace\sync_party" → "sync_party"). */
+export function cwdBasename(cwd: string | null | undefined): string | null {
+  if (!cwd) return null;
+  return cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null;
+}
+
+/**
+ * After an agent exits, pwsh/cmd put their own executable path in the window
+ * title ("C:\Program Files\WindowsApps\Microsoft.PowerShell_7…\pwsh.exe").
+ * That is not a summary — return the bare program name ("pwsh") instead.
+ */
+export function shellExecutableName(title: string | null | undefined): string | null {
+  const trimmed = title?.trim();
+  if (!trimmed || !/^(?:[a-z]:)?[\\/]/i.test(trimmed)) return null;
+  const leaf = trimmed.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  if (!/\.exe$/i.test(leaf) && !/^(?:pwsh|powershell|cmd|bash|wsl)$/i.test(leaf)) return null;
+  return leaf.replace(/\.exe$/i, "") || null;
+}
+
+/**
+ * True when a native (OSC / persisted) title carries a real session summary —
+ * rejects placeholders and chrome (cleanSessionTitle), the shell default
+ * ("PowerShell"), the cwd basename (Codex writes only its workspace folder
+ * into OSC 0), and post-exit executable paths. Shared so main's transcript
+ * summary publisher (context-meter) and the renderer header resolver apply
+ * the same rule to the same candidate.
+ */
+export function isUsableNativeSessionTitle(
+  title: string | null | undefined,
+  shellDefault: string,
+  cwd: string | null | undefined,
+): boolean {
+  const cleaned = cleanSessionTitle(title);
+  if (!cleaned) return false;
+  if (cleaned === shellDefault) return false;
+  if (cwdBasename(cwd) === cleaned) return false;
+  if (shellExecutableName(cleaned)) return false;
+  return true;
 }
 
 export function quoteTerminalPath(

@@ -100,8 +100,23 @@ export class AgentSemanticProjector {
       return;
     }
 
-    // Bounded screen fallback is used only when native transcript has no
-    // usable semantic message. Raw screen text is never persisted.
+    // For claude-*/codex-* panes whose session transcript RESOLVED (the file
+    // exists — messages may still be empty on a fresh launch), raw screen text
+    // is CLI chrome: Claude Code's status line ("Opus 5.5 | path | 69k/1000k
+    // (7%) | ▸▸ bypass permissions on …"), mode footer and the claude-team
+    // roster. The header summary for those panes comes from the transcript
+    // title path (context-meter → agentSummaryTitle), and the renderer prefers
+    // it over this projection, so any earlier screen-derived value is masked.
+    // The screen fallback is what pasted the status line into the header
+    // (2026-11-04 regression).
+    const cliTranscriptResolved =
+      (transcript.provider === "claude" || transcript.provider === "codex")
+      && (transcript.status === "ready" || transcript.status === "empty");
+    if (cliTranscriptResolved) return;
+
+    // Bounded screen fallback is used only when the native transcript is NOT
+    // resolvable (pending / not_found / ambiguous) and so has no usable
+    // semantic message. Raw screen text is never persisted.
     const screenSummary = summarizeScreenText(this.deps.getScreenText(terminalId) ?? "");
     if (!screenSummary) return;
     const observedAt = new Date(this.now()).toISOString();

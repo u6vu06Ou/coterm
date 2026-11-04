@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { createReadStream } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { MYQWEN_CLAUDE_CONTEXT_WINDOW } from "@shared/types";
+import { MYQWEN_CLAUDE_CONTEXT_WINDOW, type TerminalInfo } from "@shared/types";
+import { isUsableNativeSessionTitle, shellTitle } from "@shared/terminal";
 import { resolveCodexProfileSpec, type CodexProfileSource } from "@shared/codex-profiles";
 import type { PtyManager } from "./pty-manager";
 import { readCodexSessionMeta } from "./session-file-resolver";
+import { ClaudeSessionSummaryScanner, claudeSessionSummaryFromScan } from "./claude-session-summary";
 import { ClaudeLiveSessionTracker, type ProcessEntry } from "./claude-live-session";
 import { logger } from "../core/logger";
 
@@ -116,6 +118,8 @@ export class ContextBatteryMonitor {
    */
   private readonly claudeReads = new Map<string, { file: string; mtimeMs: number }>();
   private readonly codexReads = new Map<string, { file: string; fileMtimeMs: number; dbMtimeMs: number }>();
+  /** Per-terminal incremental transcript scanner feeding the claude header summary. */
+  private readonly claudeSummaryScans = new Map<string, ClaudeSessionSummaryScanner>();
   /**
    * Learned per-profile context tier (#79). The 200k-vs-1M tier is an
    * ACCOUNT property, and the transcript model id carries no tier marker —
@@ -244,6 +248,9 @@ export class ContextBatteryMonitor {
     for (const terminalId of this.claudeReads.keys()) {
       if (!activeIds.has(terminalId)) this.claudeReads.delete(terminalId);
     }
+    for (const terminalId of this.claudeSummaryScans.keys()) {
+      if (!activeIds.has(terminalId)) this.claudeSummaryScans.delete(terminalId);
+    }
     for (const terminalId of this.codexReads.keys()) {
       if (!activeIds.has(terminalId)) this.codexReads.delete(terminalId);
     }
@@ -258,6 +265,7 @@ export class ContextBatteryMonitor {
           s.info.cwd,
           s.info.nativeSessionId,
           s.info.startedAt,
+          s.info,
         );
       } catch (error) {
         logger.warn("pty", "contextBattery.measure.failed", "Context battery read failed", {
@@ -303,9 +311,18 @@ export class ContextBatteryMonitor {
     cwd: string,
     nativeSessionId: string | null,
     startedAt: string,
+    info: Pick<TerminalInfo, "title" | "profile" | "cwd" | "agentSummaryTitle">,
   ): Promise<void> {
     if (!cwd) return;
     if (agentProfile.startsWith("claude-")) {
+      // A real OSC work summary reclaims the header from the transcript-derived
+      // substitute the moment it arrives — even when the transcript itself has
+      // not changed since the last poll (the mtime gate below would otherwise
+      // leave the substitute stuck until the next transcript write).
+      if (info.agentSummaryTitle != null
+        && isUsableNativeSessionTitle(info.title, shellTitle(info.profile), info.cwd)) {
+        this.options.terminals.setAgentSummaryTitle(terminalId, null);
+      }
       // Claude needs a nativeSessionId for exact resolution; without it we
       // do not guess (cwd+mtime collides across same-project agent panes).
       if (!nativeSessionId) return;
@@ -323,6 +340,12 @@ export class ContextBatteryMonitor {
       // carrying proxy error text pasted that over it instead.
       const recap = await readClaudeRecap(resolved.file);
       this.options.terminals.setAgentRecap(terminalId, recap);
+      // Header summary from the transcript itself (ai-title/custom-title →
+      // recap → latest real user prompt). claude-team's auto-title call dies
+      // silently on the free proxy, so its OSC title never becomes a summary
+      // and the header fell through to the status line — this fills agentSummaryTitle
+      // instead. Never overrides a usable native OSC title.
+      await this.publishClaudeSummaryTitle(terminalId, resolved.file, info);
       // Mark the file as read BEFORE the meter gate — without it an unmetered
       // proxy pane would skip the mtime short-check and re-read on every poll.
       this.claudeReads.set(terminalId, resolved);
@@ -402,6 +425,35 @@ export class ContextBatteryMonitor {
         fileMtimeMs: fileInfo.mtimeMs,
         dbMtimeMs,
       });
+    }
+  }
+
+  /**
+   * Publish the transcript-derived claude header summary. The value is only
+   * written while the pane's native title is unusable (shell default,
+   * placeholder, cwd basename, exe path) and is released the poll after a real
+   * OSC work summary arrives, so a live Claude title always keeps the header.
+   */
+  private async publishClaudeSummaryTitle(
+    terminalId: string,
+    file: string,
+    info: Pick<TerminalInfo, "title" | "profile" | "cwd" | "agentSummaryTitle">,
+  ): Promise<void> {
+    let scanner = this.claudeSummaryScans.get(terminalId);
+    if (!scanner) {
+      scanner = new ClaudeSessionSummaryScanner();
+      this.claudeSummaryScans.set(terminalId, scanner);
+    }
+    await scanner.update(file);
+    const derived = claudeSessionSummaryFromScan(scanner.result);
+    if (!isUsableNativeSessionTitle(info.title, shellTitle(info.profile), info.cwd)) {
+      if ((info.agentSummaryTitle ?? null) !== derived) {
+        this.options.terminals.setAgentSummaryTitle(terminalId, derived);
+      }
+      return;
+    }
+    if (info.agentSummaryTitle != null) {
+      this.options.terminals.setAgentSummaryTitle(terminalId, null);
     }
   }
 

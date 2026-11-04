@@ -66,6 +66,41 @@ describe("isJunkSessionTitle", () => {
     // A guard NAME mentioned in prose is fine — only the "name:" status form is junk.
     expect(isJunkSessionTitle("修 team-guard 擋下 spawn 的誤判")).toBe(false);
   });
+
+  // 2026-11-04 claude-team regression: with no native ai-title the header fell
+  // through to the screen projection, which surfaced Claude Code's status line
+  // as the "session summary". These lines are CLI chrome, never a summary.
+  it("rejects Claude Code status-line / footer chrome", () => {
+    // The exact live-clobbered string from the bug report.
+    expect(isJunkSessionTitle(
+      "Opus 5.5 | .../workspace/3jsfloder | 69k/1000k (7%) | proxy ▸▸ bypass permissions on (shift+tab to cycle)",
+    )).toBe(true);
+    // Each ingredient alone is chrome too.
+    expect(isJunkSessionTitle("proxy ▸▸ bypass permissions on (shift+tab to cycle)")).toBe(true);
+    expect(isJunkSessionTitle("⏵⏵ accept edits on")).toBe(true);
+    expect(isJunkSessionTitle("69k/1000k (7%)")).toBe(true);
+    expect(isJunkSessionTitle("esc to interrupt")).toBe(true);
+    expect(isJunkSessionTitle("? for shortcuts")).toBe(true);
+    expect(isJunkSessionTitle("Opus 5.5 | .../workspace/3jsfloder | 69k/1000k (7%)")).toBe(true);
+  });
+
+  it("rejects the claude-team roster rows", () => {
+    expect(isJunkSessionTitle("● main")).toBe(true);
+    expect(isJunkSessionTitle("○ beta-mate")).toBe(true);
+    expect(isJunkSessionTitle("○ gamma-mate")).toBe(true);
+    // …and the marker strip must not resurrect a roster row as the bare word.
+    expect(cleanSessionTitle("● main")).toBe(null);
+    expect(cleanSessionTitle("○ beta-mate")).toBe(null);
+    // Bullets whose text is NOT a roster name stay prose.
+    expect(isJunkSessionTitle("● 完成度 80%，剩下收尾")).toBe(false);
+  });
+
+  it("keeps prose that merely mentions adjacent words", () => {
+    // Real session summaries that use similar vocabulary must survive.
+    expect(isJunkSessionTitle("權限模式調整與審核流程")).toBe(false);
+    expect(isJunkSessionTitle("Write the keyboard shortcuts doc")).toBe(false);
+    expect(isJunkSessionTitle("Token usage report for October")).toBe(false);
+  });
 });
 
 describe("cleanSessionTitle", () => {

@@ -44,7 +44,7 @@
 //   two-word body. No PTY output, no prompt, nothing that crossed the screen.
 
 import type { AppEventBus } from "../core/event-bus";
-import { cleanSessionTitle, shellTitle } from "@shared/terminal";
+import { cleanSessionTitle, cwdBasename, shellExecutableName, shellTitle } from "@shared/terminal";
 import { isAttentionState, isAgentWorking } from "@shared/pty-state";
 import type { PtyState } from "@shared/schema";
 import type { PtyStateChanged, TerminalInfo } from "@shared/types";
@@ -203,24 +203,6 @@ export type ToastTitleInfo = Pick<
   TerminalInfo,
   "isAgent" | "profile" | "cwd" | "title" | "agentSummaryTitle" | "ownedByAgentApi"
 > & { agentHandle?: string | null | undefined };
-
-/** Windows-agnostic cwd leaf ("D:\Coterm" → "Coterm"). */
-function cwdBasename(cwd: string | null | undefined): string | null {
-  if (!cwd) return null;
-  return cwd.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null;
-}
-
-/**
- * After an agent exits, pwsh/cmd stamped a shell path in the window title —
- * that is not a summary. Mirrors the renderer's terminal-display-title rule.
- */
-function shellExecutableName(title: string | null | undefined): string | null {
-  const trimmed = title?.trim();
-  if (!trimmed || !/^(?:[a-z]:)?[\\/]/i.test(trimmed)) return null;
-  const leaf = trimmed.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-  if (!/\.exe$/i.test(leaf) && !/^(?:pwsh|powershell|cmd|bash|wsl)$/i.test(leaf)) return null;
-  return leaf.replace(/\.exe$/i, "") || null;
-}
 
 /**
  * Toast title = the pane summary the header would show (agent summary / task
