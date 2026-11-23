@@ -15,6 +15,7 @@ import {
   type SttDraftSnapshot,
 } from "./settings-stt-draft";
 import { isTerminalFontInstalled, TERMINAL_FONT_OPTIONS } from "./terminal-typography";
+import { DEFAULT_TERMINAL_WHEEL_MULTIPLIER } from "./terminal-wheel-scroll";
 
 const CODE_THEME_PREVIEW = `\`\`\`ts
 const palette: Theme = "paper-light";
@@ -434,6 +435,23 @@ export function SettingsPanel(): React.JSX.Element | null {
                 <output>{settings.terminalFontSize}px</output>
               </div>
               <small>{t("settings.terminalFontSize.help")}</small>
+            </label>
+            <label>
+              {t("settings.terminalWheelScrollMultiplier")}
+              <div className="settings-range-control">
+                <input
+                  data-action-id="settings.terminal-wheel-scroll-multiplier.change"
+                  type="range"
+                  min={0.1}
+                  max={3}
+                  step={0.1}
+                  value={settings.terminalWheelScrollMultiplier ?? DEFAULT_TERMINAL_WHEEL_MULTIPLIER}
+                  aria-label={t("settings.terminalWheelScrollMultiplier")}
+                  onChange={(event) => patch("terminalWheelScrollMultiplier", Number(event.target.value))}
+                />
+                <output>{(settings.terminalWheelScrollMultiplier ?? DEFAULT_TERMINAL_WHEEL_MULTIPLIER).toFixed(1)}×</output>
+              </div>
+              <small>{t("settings.terminalWheelScrollMultiplier.help")}</small>
             </label>
             <label className="settings-code-theme-row">
               {t("settings.terminalFont")}

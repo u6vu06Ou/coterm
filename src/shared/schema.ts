@@ -1009,6 +1009,7 @@ export const appSettingsSchema = z.object({
   defaultProvider: providerProfileIdSchema.catch("claude-official").default("claude-official"),
   defaultShell: z.enum(["powershell", "cmd", "wsl", "pwsh", "zsh", "bash"]).default("pwsh"),
   terminalFontSize: z.number().int().min(8).max(48).default(16),
+  terminalWheelScrollMultiplier: z.number().min(0.1).max(3).default(0.6),
   // PTY 字體：curated monospace 清單＋系統預設。每個字型的 fallback 鏈固定接
   // CJK 備援（Microsoft JhengHei UI → Noto Sans TC → monospace），選不到的字型
   // 由 CSS 逐級退回；壞值經 .catch 退回系統預設（同 defaultProvider 路線）。
@@ -1220,6 +1221,7 @@ export const appSettingsPatchSchema = z.object({
   defaultProvider: providerProfileIdSchema.catch("claude-official").optional(),
   defaultShell: z.enum(["powershell", "cmd", "wsl", "pwsh", "zsh", "bash"]).optional(),
   terminalFontSize: z.number().int().min(8).max(48).optional(),
+  terminalWheelScrollMultiplier: z.number().min(0.1).max(3).optional(),
   terminalFont: z.enum([
     "default", "cascadia-mono", "cascadia-code", "consolas", "jetbrains-mono",
     "fira-code", "source-code-pro", "geist-mono", "ibm-plex-mono", "roboto-mono", "lxgw-wenkai-mono",

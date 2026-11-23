@@ -15,6 +15,9 @@ export function mergeAppSettingsPatch(base: AppSettings, patch: AppSettingsPatch
   if (patch.defaultProvider !== undefined) merged.defaultProvider = patch.defaultProvider;
   if (patch.defaultShell !== undefined) merged.defaultShell = patch.defaultShell;
   if (patch.terminalFontSize !== undefined) merged.terminalFontSize = patch.terminalFontSize;
+  if (patch.terminalWheelScrollMultiplier !== undefined) {
+    merged.terminalWheelScrollMultiplier = patch.terminalWheelScrollMultiplier;
+  }
   if (patch.terminalFont !== undefined) merged.terminalFont = patch.terminalFont;
   if (patch.claudeKeepaliveHours !== undefined) merged.claudeKeepaliveHours = patch.claudeKeepaliveHours;
   if (patch.proxyUrl !== undefined) merged.proxyUrl = patch.proxyUrl;

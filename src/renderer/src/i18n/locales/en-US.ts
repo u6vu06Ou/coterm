@@ -81,6 +81,8 @@ export const enUS = {
   "settings.shell.help": "New panes use pwsh to avoid mixing resume commands with different shell launch strategies.",
   "settings.terminalFontSize": "Terminal font size",
   "settings.terminalFontSize.help": "Shared by desktop, web, and mobile. Defaults to 16px and supports 8–48px.",
+  "settings.terminalWheelScrollMultiplier": "Terminal wheel speed",
+  "settings.terminalWheelScrollMultiplier.help": "Linear scrolling with no acceleration. The default 0.6× maps a standard mouse notch to about 3 lines; touchpad fractions are retained.",
   "settings.terminalFont": "Terminal font",
   "settings.terminalFont.help": "Synced across desktop, web, and mobile. Options marked not installed fall back to the next installed font.",
   "settings.terminalFont.unavailable": "not installed",

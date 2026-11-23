@@ -23,6 +23,7 @@ let settings: AppSettings = {
   defaultProvider: "claude-official",
   defaultShell: "powershell",
   terminalFontSize: 16,
+  terminalWheelScrollMultiplier: 0.6,
   terminalFont: "default",
   claudeKeepaliveHours: 2,
   proxyUrl: "http://127.0.0.1:8787",

@@ -67,6 +67,12 @@ import { findTuiInputCaret, installTypedLineMarker, type TypedLineMarker } from 
 import { calculateRemoteRows } from "./terminal-remote-rows";
 import { nextRemoteFitCorrectionFontSize, nextRemoteFitFontSize } from "./terminal-remote-fit";
 import { fitTerminalToHost, readTerminalCellMetrics } from "./terminal-fit";
+import {
+  consumeTerminalWheelDelta,
+  DEFAULT_TERMINAL_WHEEL_MULTIPLIER,
+  initialTerminalWheelMapperState,
+  MAX_SYNTH_WHEEL_EVENTS,
+} from "./terminal-wheel-scroll";
 import { shouldSendTerminalResize, type PtyGridGeometry } from "@shared/pty-geometry";
 import { tileHydrationKey } from "./terminal-dock-hydration-key";
 import { createComposingGate, createRecoveryScheduler, planRecovery } from "./terminal-recovery";
@@ -1410,6 +1416,8 @@ function XtermPane({
   // Drives which header controls render (see the header JSX below).
   const isMobileLayout = useIsMobile();
   const terminalFontSize = useAppStore((s) => s.settings?.terminalFontSize ?? 16);
+  const terminalWheelScrollMultiplier = useAppStore((s) =>
+    s.settings?.terminalWheelScrollMultiplier ?? DEFAULT_TERMINAL_WHEEL_MULTIPLIER);
   const terminalFont = useAppStore((s) => s.settings?.terminalFont ?? "default");
   const terminalThemePreference = useAppStore((s) => s.settings?.terminalTheme ?? "auto");
   // Header double-click solo (maximize) toggle: primitive selectors so the pane
@@ -1420,6 +1428,7 @@ function XtermPane({
   const setExclusive = useAppStore((s) => s.setExclusive);
   const readingModeActive = useAppStore((s) => s.readingModeActive);
   const terminalFontSizeRef = useRef(terminalFontSize);
+  const terminalWheelScrollMultiplierRef = useRef(terminalWheelScrollMultiplier);
   const terminalFontRef = useRef(terminalFont);
   // Font size already applied locally (canvas + PTY resize) but not yet flushed
   // to settings by the debounced persist. While this equals the live
@@ -1599,6 +1608,9 @@ function XtermPane({
   // tile's remount body.
   const saveAttachmentRef = useRef(saveAttachment);
   useEffect(() => { saveAttachmentRef.current = saveAttachment; }, [saveAttachment]);
+  useEffect(() => {
+    terminalWheelScrollMultiplierRef.current = terminalWheelScrollMultiplier;
+  }, [terminalWheelScrollMultiplier]);
 
   useEffect(() => {
     terminalFontSizeRef.current = terminalFontSize;
@@ -2018,6 +2030,11 @@ function XtermPane({
       // (~10-20k heavy lines) — a smaller xterm cap would silently re-truncate
       // what the bigger main-process buffer just preserved.
       scrollback: 20_000,
+      // Coterm owns every wheel event on the host capture phase. Keep xterm's
+      // fallback native path neutral if an event ever slips past that boundary.
+      scrollSensitivity: 1,
+      fastScrollSensitivity: 1,
+      smoothScrollDuration: 0,
       // 日月色票的背景是 CSS 漸層，xterm 畫透明（其他色票維持不透明，字最銳利）。
       allowTransparency: resolvedThemeRef.current.transparentBackground === true,
       theme: resolvedThemeRef.current.palette,
@@ -3040,18 +3057,44 @@ function XtermPane({
       lockImeHorizontalLayout();
       host.classList.remove("ime-composing");
     };
-    // #14 retry: ctrl+wheel zoom decision extracted to terminal-input-routing.
-    // xterm v6 owns plain-wheel scrolling natively (a second local scrollLines
-    // fought it into jitter); only ctrl+wheel font-zoom is ours.
+    // One wheel owner: xterm v6 listens on its .xterm mouse target and on the
+    // inner scrollable element. Capturing at the host and stopping propagation
+    // prevents BOTH native handlers from also consuming the same event (the
+    // old local scrollLines + native pair fought each other into jitter).
+    let wheelMapper = initialTerminalWheelMapperState();
     const onWheel = (event: WheelEvent) => {
-      routeCtrlWheelZoom(event, {
+      // Ctrl+wheel zoom gets first refusal and remains an independent action.
+      if (routeCtrlWheelZoom(event, {
         getFontSize: () => terminal.options.fontSize ?? terminalFontSizeRef.current,
         applyFontSize,
-      });
+      })) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      const mapped = consumeTerminalWheelDelta({
+        deltaY: event.deltaY,
+        deltaMode: event.deltaMode,
+        cellHeightPx: terminalCellHeight(host, { rows: terminal.rows }),
+        rows: terminal.rows,
+        multiplier: terminalWheelScrollMultiplierRef.current,
+        nowMs: performance.now(),
+      }, wheelMapper);
+      wheelMapper = mapped.state;
+      if (mapped.lines === 0) return;
+
+      const capped = Math.max(-MAX_SYNTH_WHEEL_EVENTS, Math.min(MAX_SYNTH_WHEEL_EVENTS, mapped.lines));
+      if (isMouseReportingActive() && reportTouchWheel(capped, event.clientX, event.clientY)) return;
+      if (terminal.buffer.active.type === "alternate") {
+        // Alt screen without mouse reporting: like xterm, one up/down cursor
+        // sequence per row (linear, capped), through the onData path.
+        const prefix = terminal.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
+        terminal.input(`${prefix}${capped < 0 ? "A" : "B"}`.repeat(Math.abs(capped)), true);
+        return;
+      }
+      terminal.scrollLines(mapped.lines);
     };
-    // passive:false is mandatory because Ctrl+wheel calls preventDefault().
-    // passive:true let Chromium page-zoom AND xterm font-zoom run together,
-    // producing mismatched canvas metrics and visibly duplicated rows.
+    // passive:false is mandatory because ctrl+wheel and linear scrolling both
+    // preventDefault(); otherwise Chromium page-zoom or native scrolling runs.
     const wheelOptions: AddEventListenerOptions = { capture: true, passive: false };
     host.addEventListener("wheel", onWheel, wheelOptions);
     // Click-to-move-caret: Alt+click moves the PTY cursor to the clicked cell

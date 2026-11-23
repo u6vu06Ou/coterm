@@ -79,6 +79,8 @@ export const zhTW = {
   "settings.shell.help": "新 pane 固定使用 pwsh，避免 resume 指令與不同 shell 啟動策略混用。",
   "settings.terminalFontSize": "終端字體大小",
   "settings.terminalFontSize.help": "桌面、網頁與手機共用；預設 16px，可調整為 8–48px。",
+  "settings.terminalWheelScrollMultiplier": "終端滾輪速度",
+  "settings.terminalWheelScrollMultiplier.help": "線性捲動、不加速。預設 0.6× 讓一般滑鼠一格約捲 3 行，觸控板不足一行的距離也會累積。",
   "settings.terminalFont": "終端字體",
   "settings.terminalFont.help": "桌面、網頁與手機同步；標示「未安裝」的字型會由備援字體接手。",
   "settings.terminalFont.unavailable": "未安裝",

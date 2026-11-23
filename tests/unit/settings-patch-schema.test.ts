@@ -69,6 +69,15 @@ describe("mergeAppSettingsPatch (#60)", () => {
     expect(merged.browserNetwork.mode).toBe("allow-hosts");
   });
 
+  it("defaults the terminal wheel multiplier to 0.6 and accepts the 0.1–3 range", () => {
+    expect(appSettingsSchema.parse({}).terminalWheelScrollMultiplier).toBe(0.6);
+    expect(appSettingsPatchSchema.parse({ terminalWheelScrollMultiplier: 0.1 }).terminalWheelScrollMultiplier).toBe(0.1);
+    expect(appSettingsPatchSchema.parse({ terminalWheelScrollMultiplier: 3 }).terminalWheelScrollMultiplier).toBe(3);
+    expect(() => appSettingsPatchSchema.parse({ terminalWheelScrollMultiplier: 3.1 })).toThrow();
+    expect(() => appSettingsPatchSchema.parse({ terminalWheelScrollMultiplier: 0 })).toThrow();
+    expect(mergeAppSettingsPatch(base, { terminalWheelScrollMultiplier: 1.4 }).terminalWheelScrollMultiplier).toBe(1.4);
+  });
+
   it("defaults and deep-merges browser approval mode", () => {
     expect(appSettingsSchema.parse({}).browserApproval.mode).toBe("ask");
     expect(appSettingsSchema.parse({ browserApproval: { mode: "auto" } }).browserApproval.mode).toBe("auto");

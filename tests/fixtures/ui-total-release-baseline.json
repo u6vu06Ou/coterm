@@ -83,6 +83,7 @@
       "settings.search-index.toggle",
       "settings.session-restore.toggle",
       "settings.terminal-font.change",
+      "settings.terminal-wheel-scroll-multiplier.change",
       "settings.voice-live-gemini-key.change",
       "settings.voice-live-gemini-model.change",
       "settings.voice-live-provider.change",

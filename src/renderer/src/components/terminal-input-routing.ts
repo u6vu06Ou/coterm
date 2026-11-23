@@ -122,8 +122,8 @@ export interface WheelZoomActions {
 /**
  * Ctrl+wheel = font zoom; consumed (preventDefault+stopPropagation) so
  * Chromium page-zoom and xterm's own wheel handler never double-run. Any
- * non-ctrl wheel is left to xterm natively (see the TerminalDock "ponytail"
- * note: a second local scrollLines fought xterm's handler into jitter).
+ * non-ctrl wheel is left to TerminalDock's single linear-scroll owner (xterm
+ * never sees it, avoiding the old native + local double-scroll jitter).
  * Returns true when Coterm consumed the event.
  */
 export function routeCtrlWheelZoom(event: WheelZoomEvent, actions: WheelZoomActions): boolean {
